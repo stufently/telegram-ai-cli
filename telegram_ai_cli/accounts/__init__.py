@@ -40,7 +40,13 @@ from .fs import (
 )
 from .loader import build_client, load_account
 from .lock import SessionLock
-from .login import LoginResult, interactive_login, login_and_register
+from .login import (
+    LoginResult,
+    interactive_login,
+    login_and_register,
+    qr_login,
+    qr_login_and_register,
+)
 from .models import USABLE_STATUSES, AccountSource, AccountStatus
 from .paths import SessionPaths, auth_key_id, sanitize_label, session_lock_path
 from .proxy import mask_secret, parse_proxy_url, redact_proxy_url, redact_secrets
@@ -82,6 +88,8 @@ __all__ = [
     "looks_like_tdata",
     "mask_secret",
     "parse_proxy_url",
+    "qr_login",
+    "qr_login_and_register",
     "read_private_text",
     "recoverable_errors",
     "redact_proxy_url",

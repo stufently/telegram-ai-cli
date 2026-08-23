@@ -1,17 +1,25 @@
-"""``account add`` / ``account login`` — putting an account into the fleet.
+"""``account add`` / ``account login`` / ``account login-qr`` — putting an
+account into the fleet.
 
-Every other operation starts from an account that already exists; these two are
-how one comes to exist. They are the first commands the README tells a person
-to run, and the ones every "no usable account is configured" suggestion points
+Every other operation starts from an account that already exists; these are how
+one comes to exist. They are the first commands the README tells a person to
+run, and the ones every "no usable account is configured" suggestion points
 back at.
 
-**Neither is an MCP tool, and that is enforced rather than remembered.** Both
-are :attr:`~telegram_ai_cli.opspec.Effect.LOCAL_ADMIN`, which the registry's
+**None is an MCP tool, and that is enforced rather than remembered.** All are
+:attr:`~telegram_ai_cli.opspec.Effect.LOCAL_ADMIN`, which the registry's
 invariants refuse to publish as a tool. Two reasons, and either alone would be
-enough: signing in asks a human for the code Telegram just sent to their phone,
-which no tool call can answer; and enrolling an account is the one action that
-widens the fleet the rest of the policy is written against — a caller who can
-add an account can add one whose chats no allowlist was ever written for.
+enough: signing in puts something in front of a human — the code Telegram just
+sent to their phone, or a QR code only they can hold a phone up to — which no
+tool call can answer; and enrolling an account is the one action that widens the
+fleet the rest of the policy is written against — a caller who can add an
+account can add one whose chats no allowlist was ever written for.
+
+The QR login has a third reason of its own. Its token *is* the login: whatever
+imports ``tg://login?token=…`` becomes the account, with no code and no
+password. A tool that could ask for one would be handing a caller a credential
+across the boundary the whole design exists to hold, which is why the URL is
+drawn on the terminal and appears in no result, no log and no audit record.
 
 Credentials stay off the command line, with one caveat stated rather than
 hidden. There is no ``--api-hash`` flag: a value in ``argv`` is visible in
@@ -32,11 +40,18 @@ use a proxy that does not need a password.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..accounts.login import login_and_register, normalize_phone
+from ..accounts.login import (
+    login_and_register,
+    normalize_phone,
+    qr_login_and_register,
+    require_display_terminal,
+    show_qr,
+)
 from ..accounts.models import AccountSource
 from ..accounts.spec import AccountSpec
 from ..accounts.views import AccountView
@@ -94,6 +109,23 @@ class LoginInput(AccountInput):
     replace: bool = Field(
         default=False,
         description="Sign in even if this label is registered from tdata or a session file.",
+    )
+
+
+class QrLoginInput(AccountInput):
+    """No phone number: the point of the flow is that nothing is typed."""
+
+    proxy: str | None = Field(
+        default=None,
+        description="Proxy URL to sign in through. Omit to reuse the registered one.",
+    )
+    replace: bool = Field(
+        default=False,
+        description="Sign in even if this label is registered from tdata or a session file.",
+    )
+    invert: bool = Field(
+        default=False,
+        description="Swap the QR code's blocks and gaps, for a terminal with a dark background.",
     )
 
 
@@ -211,6 +243,30 @@ async def handle_account_add(ctx: OperationContext, params: AddAccountInput) -> 
     return Envelope.success(payload)
 
 
+def _refuse_to_repoint(registry: Any, existing: Any, *, replace: bool, kind: str) -> None:
+    """Stop a login from silently pointing a label at different material.
+
+    Two ways that happens: the row names another kind of source (tdata, a
+    session string), or it names a ``.session`` adopted from somewhere else —
+    ``account add --session-file …`` with copying turned off leaves the row
+    pointing at the operator's own file, and a login would write a new one over
+    the label instead.
+
+    The message names the label and the source, never a path: it is rendered
+    back to a caller, and a failure envelope neither wraps nor defangs what it
+    quotes.
+    """
+    own_session = str(registry.paths_for(existing.label).session_file)
+    elsewhere = (existing.session_path or own_session) != own_session
+    if (existing.source is not AccountSource.SESSION_FILE or elsewhere) and not replace:
+        raise InvalidInput(
+            f"account {existing.label!r} is already registered from "
+            f"{existing.source}; {kind.lower()} would replace that "
+            "registration with a new session",
+            suggestion="Pass --replace to sign in anyway, or use a different label.",
+        )
+
+
 async def handle_account_login(ctx: OperationContext, params: LoginInput) -> Envelope:
     """Sign an account in, prompting for the code Telegram sends.
 
@@ -232,21 +288,7 @@ async def handle_account_login(ctx: OperationContext, params: LoginInput) -> Env
     proxy_url = params.proxy
 
     if existing is not None:
-        # Two ways a login can quietly repoint an account at different material:
-        # the row names another kind of source (tdata, a session string), or it
-        # names a .session adopted from somewhere else — `account add
-        # --session-file … ` with copying turned off leaves the row pointing at
-        # the operator's own file, and this login would write a new one over the
-        # label instead.
-        own_session = str(registry.paths_for(params.label).session_file)
-        elsewhere = (existing.session_path or own_session) != own_session
-        if (existing.source is not AccountSource.SESSION_FILE or elsewhere) and not params.replace:
-            raise InvalidInput(
-                f"account {existing.label!r} is already registered from "
-                f"{existing.source}; a phone login would replace that "
-                "registration with a new session",
-                suggestion="Pass --replace to sign in anyway, or use a different label.",
-            )
+        _refuse_to_repoint(registry, existing, replace=params.replace, kind="A phone login")
         spec = AccountSpec.from_record(existing, registry.store)
         phone = phone or existing.phone
         proxy_url = proxy_url or spec.proxy_url
@@ -290,6 +332,67 @@ async def handle_account_login(ctx: OperationContext, params: LoginInput) -> Env
     return Envelope.success(payload)
 
 
+async def handle_account_login_qr(ctx: OperationContext, params: QrLoginInput) -> Envelope:
+    """Sign an account in by QR code: it is displayed, scanned, and that is all.
+
+    No phone number is asked for or needed, so this also enrols a label that was
+    never registered — the row is written by the same call the phone login uses,
+    at the same point, and everything it leaves on disk is identical.
+
+    The ``tg://login`` URL goes to the terminal and nowhere else. It is not in
+    the envelope this returns, not in the audit record, and not in the log: an
+    audit file outlives the terminal it was written from, and this particular
+    string is enough on its own to take the account over. That is also why the
+    terminal is required *before* anything is requested: a token that has been
+    minted and cannot be shown is a live credential created for nothing, and
+    stdout — which may be a file, a pipe, or a caller reading `--json` — is not
+    somewhere it may be written.
+    """
+    require_display_terminal()
+    registry = _registry(ctx)
+    existing = registry.store.get(params.label)
+
+    api_id, api_hash = _fallback_api(ctx)
+    proxy_url = params.proxy
+    phone = None
+
+    if existing is not None:
+        _refuse_to_repoint(registry, existing, replace=params.replace, kind="A QR login")
+        spec = AccountSpec.from_record(existing, registry.store)
+        proxy_url = proxy_url or spec.proxy_url
+        api_id = spec.api_id or api_id
+        api_hash = spec.api_hash or api_hash
+        # Carried through rather than re-verified: a QR login never checks a
+        # number, so it must not blank one an earlier login did check.
+        phone = existing.phone
+
+    event = ctx.audit.attempt(action="account.login_qr", account=params.label, actor=ctx.actor)
+    try:
+        result = await qr_login_and_register(
+            registry.store,
+            label=params.label,
+            sessions_dir=registry.sessions_dir,
+            phone=phone,
+            api_id=api_id,
+            api_hash=api_hash,
+            proxy_url=proxy_url,
+            settings=ctx.settings,
+            box=registry.store.box,
+            display=partial(show_qr, invert=params.invert),
+            replace=params.replace or existing is not None,
+        )
+    except TelegramAIError as exc:
+        # The code, not the message, exactly as the phone login records it.
+        ctx.audit.outcome(event, status="failed", error_code=str(exc.code))
+        raise
+    ctx.audit.outcome(event, status="applied")
+
+    payload = _describe(registry.require(result.label))
+    payload["username"] = result.username
+    payload["next"] = f"tg-ai fleet --account {result.label}"
+    return Envelope.success(payload)
+
+
 ADD_ACCOUNT = REGISTRY.register(
     Operation(
         name="account.add",
@@ -322,6 +425,27 @@ LOGIN_ACCOUNT = REGISTRY.register(
         effect=Effect.LOCAL_ADMIN,
         capability=None,
         handler=handle_account_login,  # type: ignore[arg-type]
+        tags=("accounts", "admin"),
+    )
+)
+
+LOGIN_ACCOUNT_QR = REGISTRY.register(
+    Operation(
+        name="account.login_qr",
+        cli=("account", "login-qr"),
+        summary="Sign a registered account in by scanning a QR code.",
+        description=(
+            "Draws a login QR code in the terminal and waits for an already signed-in "
+            "Telegram app to scan it — Settings → Devices → Link Desktop Device. No "
+            "phone number and no code are typed; an expired code is redrawn a few "
+            "times, and a two-step verification password is prompted for exactly as "
+            "the phone login prompts for it. The login token is shown and never "
+            "logged, recorded or returned."
+        ),
+        input_model=QrLoginInput,
+        effect=Effect.LOCAL_ADMIN,
+        capability=None,
+        handler=handle_account_login_qr,  # type: ignore[arg-type]
         tags=("accounts", "admin"),
     )
 )

@@ -232,6 +232,20 @@ class AccountStore:
             (user_id, sanitize_label(label)),
         )
 
+    def set_phone(self, label: str, phone: str | None) -> None:
+        """Record the number the session actually belongs to, or clear it.
+
+        Written after a login rather than before one, which is the only moment
+        the number is a fact instead of an assumption: a QR code can be scanned
+        by whichever account the person was signed in as, and a row whose phone
+        and whose session name two different accounts is worse than a row with
+        no phone at all.
+        """
+        self._conn.execute(
+            "UPDATE accounts SET phone = ? WHERE label = ?",
+            (phone, sanitize_label(label)),
+        )
+
     def set_proxy(self, label: str, proxy_url: str | None) -> None:
         self._conn.execute(
             "UPDATE accounts SET proxy_url = ? WHERE label = ?",

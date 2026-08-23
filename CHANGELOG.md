@@ -139,6 +139,53 @@ before that, breaking changes can happen on any `0.x` release.
   because a pin changes what every member of the chat sees.
   `telegram_ai_cli/ops/marks.py`, `tests/test_reactions_pins.py`.
 
+- **QR login — `tg-ai account login-qr`.** A second way to authorise an account,
+  alongside the phone code that stays the default: the command draws a QR code
+  in the terminal, an app that is already signed in scans it (Settings → Devices
+  → Link Desktop Device), and nothing is typed anywhere. No phone number is
+  needed, so a label that was never registered is enrolled by this command
+  alone.
+  **The login token is treated as the credential it is.** `tg://login?token=…`
+  *is* the login — whatever imports it becomes the account, with no code and no
+  password — so it goes to the terminal and nowhere else: not the log at any
+  level, not the audit record, not the result envelope. It reaches a display
+  callback rather than a logger, which is what the test asserts. Specifically
+  **not stdout**: `tg-ai --json account login-qr > out.json` would otherwise
+  write a live login token into a file (and emit invalid JSON while doing it).
+  The code is drawn on the controlling terminal — `/dev/tty`, or `stderr` when
+  that is itself a terminal — and if there is neither, the command refuses
+  *before* asking Telegram for a token, because a credential that has been
+  minted and cannot be shown is one that existed for nothing. The raw URL is
+  printed under the code on purpose, as the fallback for terminals that cannot
+  draw block characters.
+  **Expiry is the ordinary case, and it is bounded.** Telegram expires the token
+  in well under a minute, which a person walking off to fetch their phone will
+  miss, so the code is regenerated and redrawn up to four times — and then the
+  command says so rather than redrawing forever while holding the account's
+  session lock. Expiry has two shapes and both are handled: Telethon's
+  `TimeoutError` when nobody scanned, and Telegram's own `AUTH_TOKEN_EXPIRED`
+  when a scan lands just after the deadline. A flood wait asking for a token
+  becomes this project's `FloodWait` rather than escaping as a raw Telethon
+  error past the `except TelegramAIError` that records the account's status.
+  **The row records the account that actually signed in.** A QR code can be
+  scanned by whichever account the person happened to be signed in as, so the
+  number stored afterwards is that account's own (new `AccountStore.set_phone`),
+  not the one the row carried in. A row whose phone names one account and whose
+  session names another is worse than a row with no phone: it is the number a
+  later `account login` would send a code to.
+  **Two-step verification is the phone flow's own prompt**, called rather than
+  copied, and both flows now run through one body: the `0600` session file, the
+  frozen fingerprint, the lock and the "already authorised, do nothing"
+  shortcut are written once and cannot drift apart between the two.
+  **It is `local_admin` like the other account commands** — terminal only, and
+  the registry refuses to publish it as an MCP tool. A third reason on top of
+  the existing two: a tool that could ask for a login token would be handing a
+  caller the account itself across the boundary the design exists to hold.
+  Adds one dependency, `qrcode` (pure Python, no transitive dependency on this
+  platform) — a QR encoder is not something to hand-roll into a project that
+  holds session keys. `--invert` swaps the blocks for a dark-background
+  terminal, which is a guess no program can make on the user's behalf.
+
 - **Moderation, and an undo for every rights change** — `telegram_plan_ban_user`,
   `telegram_plan_unban_user`, `telegram_plan_kick_user`,
   `telegram_plan_restrict_user`, `telegram_plan_demote_admin` (`tg-ai chat ban`

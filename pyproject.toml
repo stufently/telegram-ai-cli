@@ -60,6 +60,11 @@ dependencies = [
     "python-socks[asyncio]>=2.7,<4",
     "cryptography>=45",
     "mcp>=2.0,<3",
+    # Terminal QR rendering for `account login-qr`. Pure Python, no transitive
+    # dependency on this platform (its only requirement, colorama, is Windows
+    # only) — a QR encoder is not something to hand-roll into a project that
+    # holds session keys.
+    "qrcode>=8.2,<9",
 ]
 
 [project.optional-dependencies]

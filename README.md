@@ -127,6 +127,14 @@ tg-ai account add --label work
 tg-ai account login --label work
 ```
 
+Or sign in without typing anything, from a phone or desktop that is already logged in:
+
+```bash
+tg-ai account login-qr --label work     # add --invert if your terminal has a dark background
+```
+
+`account login-qr` draws a QR code in the terminal and waits for you to scan it in Telegram → **Settings → Devices → Link Desktop Device**. No phone number, no code: the code carries a one-shot login token, and the app that scans it authorizes the session. An unscanned code expires in well under a minute and is redrawn a few times before the command gives up; two-step verification is prompted for exactly as the phone login prompts for it. The raw `tg://login?token=…` URL is printed under the code as a fallback for terminals that can't draw block characters — **treat it as a password**: whatever opens it takes the account. It goes to your terminal and nowhere else — never to the log, the audit file, a command's output or stdout (so redirecting the command into a file can't capture it), and with no terminal at all the command refuses rather than minting a token nobody can see. A label that was never registered is enrolled by this command on its own, so `account add` first is optional.
+
 Account material — the Telethon `.session`, the frozen device fingerprint and (if used) proxy credentials — lands under `~/.local/state/telegram-ai-cli/` with `0700`/`0600` permissions; `api_hash` and proxy secrets are encrypted at rest with a key you control (`TGAI_SECRET_KEY`, or a generated key file — see [`telegram_ai_cli/secretbox.py`](telegram_ai_cli/secretbox.py)).
 
 Everything else lives in one YAML file, `~/.config/telegram-ai-cli/tgai.yaml` by default (`TGAI_CONFIG` to point elsewhere), overlaid by `TGAI_`-prefixed environment variables (`TGAI_PROFILE`, `TGAI_SAFETY__WRITE__SEND__ALLOW`, and so on — double underscore nests):
@@ -265,7 +273,7 @@ The four `telegram_archive_*` tools are the way out of paying an RPC for every q
 
 The five moderation tools exist so that every rights change has an undo. Granting admin rights was possible long before taking any back, which meant an agent could produce a state it had no way to reverse: `plan_ban_user` is paired with `plan_unban_user`, `plan_promote_admin` with `plan_demote_admin`, and `plan_restrict_user` either expires on its own or is lifted by the same unban — Telegram keeps a ban and a restriction in one set of rights. **One member per plan**, never a list: banning six people behind a single approval is exactly the blast radius the review step exists to bound. The preview names the person, the chat, each right being taken and how long it lasts, and for the two nobody on the receiving end can reverse — a ban and a kick — it says so in as many words.
 
-`tg-ai account add` and `tg-ai account login` are absent from this list on purpose, and the registry refuses to publish them: signing in asks a person for the code Telegram sent to their phone, and enrolling an account widens the very fleet every allowlist is written against.
+`tg-ai account add`, `tg-ai account login` and `tg-ai account login-qr` are absent from this list on purpose, and the registry refuses to publish them: signing in puts something in front of a person — the code Telegram sent to their phone, or a QR code only they can hold a phone up to — and enrolling an account widens the very fleet every allowlist is written against. The QR login has a third reason of its own: its `tg://login?token=…` *is* the login, so a tool that could ask for one would hand a caller the account itself.
 
 `telegram_media_fetch` looks like a read tool but isn't one — it writes a file, so it goes through the same server-controlled path handling as everything else that touches disk: the caller never supplies a path, the file lands under a download root with a generated name (`O_CREAT|O_EXCL|O_NOFOLLOW`, a size cap and a running quota), and only an opaque `artifact_id` comes back.
 

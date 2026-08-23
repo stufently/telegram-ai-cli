@@ -31,6 +31,24 @@ is
       default. Raised while implementing the writes, deliberately not answered in
       the same change.
 
+- [ ] **The QR code's colours are a flag, not a detection.** `--invert` exists
+      because a terminal cannot be asked what its background is. `COLORFGBG`,
+      OSC 11 queries and `$TERM_PROGRAM` all half-answer it; none is reliable
+      enough to flip a code somebody is pointing a camera at, so the default is
+      documented instead. Worth revisiting only if the flag turns out to be the
+      first thing every user has to discover.
+
+- [ ] **A QR login can be scanned by the wrong account, and only says so
+      afterwards.** The row's `user_id` and `phone` are corrected to whoever
+      actually scanned (that is what `AccountStore.set_phone` is for), so the
+      account inventory never *lies* — but nothing refuses the identity change
+      at the time, because by the point it is knowable the session file is
+      already authorised on disk. Refusing properly means comparing the previous
+      `user_id` against the new one and, on a mismatch without `--replace`,
+      undoing the login: logging the new session out, deleting it, and restoring
+      the row. That is a rollback path with its own failure modes, not a
+      condition, which is why it is a backlog item rather than an `if`.
+
 - [ ] **No handler-level tests.** Everything under `ops/` is tested through its
       pure parts (`_serialize`, `links`, `untrusted`, the policy kernel); no test
       drives a handler with a fake Telethon client. Raised by review: the cases

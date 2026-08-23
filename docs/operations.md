@@ -1347,8 +1347,9 @@ may be waiting at once.
 
 Effect `local_admin`: terminal only, absent from the MCP tool surface, and the
 registry refuses to publish them. Two reasons, either sufficient — signing in
-asks a human for the code Telegram just sent to their phone, and enrolling an
-account widens the very fleet every allowlist is written against.
+puts something in front of a human (the code Telegram just sent to their phone,
+or a QR code only they can hold a phone up to), and enrolling an account widens
+the very fleet every allowlist is written against.
 
 ### `tg-ai account add`
 
@@ -1403,9 +1404,56 @@ the two-step verification password if the account has one.
   It would otherwise rewrite the row to point at a session this login creates,
   which is a different account's worth of material.
 
-Both commands write an `attempt`/`outcome` pair to the audit log once they start
-doing the work; an argument refused up front (two sources at once, no phone
-number to use) is rejected before anything is recorded. A failure records the
+### `tg-ai account login-qr`
+
+Signs an account in by drawing a QR code in the terminal for an app that is
+already signed in to scan — Telegram → Settings → Devices → Link Desktop Device.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `label` | string | **required** | Which account to sign in |
+| `proxy` | string | — | Proxy to sign in through. Omit to reuse the registered one |
+| `replace` | bool | `false` | Sign in even if this label is registered from `tdata` or a session file |
+| `invert` | bool | `false` | Swap the code's blocks and gaps, for a terminal with a dark background |
+
+- **Nothing is typed, and no phone number is needed** — which also means a label
+  that was never registered is enrolled by this command alone; `account add`
+  first is optional. Afterwards the row carries the number of the account that
+  actually scanned the code, read from `get_me`: a QR code can be scanned by
+  whichever account the person was signed in as, and a row whose phone names one
+  account while its session names another is the number a later `account login`
+  would send a code to.
+- **The login token is a credential of the same rank as a password.**
+  `tg://login?token=…` *is* the login: whatever imports it becomes the account,
+  with no code and no password. It reaches the terminal and nothing else — not
+  the log at any level, not the audit record, not the result. Not stdout either:
+  it is written to the controlling terminal (`/dev/tty`, or `stderr` when that
+  is a terminal), because `tg-ai --json account login-qr > out.json` would
+  otherwise put a live token in a file. With neither available the command
+  refuses **before** requesting a token rather than minting one nobody can see.
+  The raw URL is printed under the code deliberately, as the fallback for a
+  terminal that cannot draw block characters or a reader that cannot see them,
+  and it is worth guarding like the password it effectively is.
+- **A code expires, and expiry is the ordinary case.** Telegram gives the token
+  well under a minute; a person fetching their phone will miss the first one. So
+  it is regenerated and redrawn up to four times, and then the command says so
+  rather than redrawing forever in front of an empty chair while holding the
+  account's session lock. Both shapes of expiry count: the token's own deadline
+  passing unscanned, and Telegram answering `AUTH_TOKEN_EXPIRED` to a scan that
+  landed a moment too late.
+- **Two-step verification is the phone flow's prompt**, not a second copy of it:
+  the same `getpass` read, the same attempt counting, the same rule that the
+  password never comes from an argument or the environment.
+- **Which way round the blocks go is a guess a terminal cannot make for you.**
+  The default draws dark modules as solid blocks, which is what a scanner
+  expects on a light background; `--invert` is the dark-background rendering.
+  Everything else about the session — the `0600` file, the frozen fingerprint,
+  the lock, the idempotent "already authorised" shortcut — is byte for byte what
+  `account login` produces, because it is the same code path.
+
+All three commands write an `attempt`/`outcome` pair to the audit log once they
+start doing the work; an argument refused up front (two sources at once, no
+phone number to use) is rejected before anything is recorded. A failure records the
 error *code*, not the message — an error string from this path can carry a phone
 number or a proxy password, and the log outlives the terminal.
 

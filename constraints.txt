@@ -19,6 +19,7 @@ PyYAML==6.0.3
 python-socks==3.0.0
 cryptography==50.0.0
 mcp==2.0.0
+qrcode==8.2
 
 # Test-only pins (installed together with the `test` extra).
 pytest==9.1.1
