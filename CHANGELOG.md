@@ -52,9 +52,14 @@ before that, breaking changes can happen on any `0.x` release.
   before its messages are fetched, checked before the request so a refused chat
   costs no call and is reported as withheld. Chats whose counters are zero are
   never asked about, and the candidates are ranked and cut to `limit` before any
-  page is requested.
+  page is requested. Private chats are dropped *before* their counters are read,
+  so the omitted tally cannot say how many conversations somebody is waiting in;
+  stopping at the dialog-scan ceiling is a warning and `meta.truncated`, not a
+  short list that looks complete; and a named `account` that fails is an error
+  rather than an empty answer, since "no mentions" and "nobody looked" must not
+  serialize identically.
 - `telegram_inbox` ranks on unread reactions too: mentions first, then unread
-  reactions, then volume, then recency. A 👍 on this account's own message is a
+  reactions, then volume, then longest waiting. A 👍 on this account's own message is a
   response *to it*; two hundred unread messages in a group are a busy group.
   Dialog rows (`telegram_chats`, `telegram_inbox`) carry the third count as
   `reactions`, and the inbox `totals` sum it. `mentions_only` still means

@@ -15,6 +15,7 @@ with no Telethon installed, and the type it cannot recognise degrades to
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -216,6 +217,44 @@ def reactions_summary(message: Any) -> list[dict[str, Any]] | None:
     return rows
 
 
+def recent_reactors(reactions: Any, *, unread_only: bool = False) -> list[dict[str, Any]] | None:
+    """The handful of reactors Telegram attaches to the message itself.
+
+    Never a request of its own: ``messages.getMessageReactionsList`` would name
+    every person who reacted, gated by their own privacy settings, and pulling
+    it turns a count into a roster. What is reported here arrived *with* the
+    message, so reporting it costs nothing and reveals nothing extra.
+
+    ``unread_only`` keeps the ones Telegram still flags as new. A page of unread
+    reactions carries the older reactors on the same message too, and treating
+    those as fresh would re-announce a reaction the owner has already seen.
+    """
+    recent = getattr(reactions, "recent_reactions", None)
+    if not recent:
+        return None
+    rows: list[dict[str, Any]] = []
+    for item in recent:
+        if unread_only and not getattr(item, "unread", False):
+            continue
+        reaction = getattr(item, "reaction", None)
+        custom = getattr(reaction, "document_id", None)
+        peer = getattr(item, "peer_id", None)
+        try:
+            peer_id = marked_id(peer) if peer is not None else None
+        except Exception:  # noqa: BLE001 - an unknown peer shape is not fatal
+            peer_id = None
+        rows.append(
+            {
+                "peer_id": peer_id,
+                "kind": reaction_kind(reaction),
+                "emoji": getattr(reaction, "emoticon", None),
+                "custom_emoji_id": str(custom) if custom is not None else None,
+                "date": iso(getattr(item, "date", None)),
+            }
+        )
+    return rows
+
+
 def topic_id_of(message: Any) -> int | None:
     """The forum topic a message belongs to, if it is in a forum at all.
 
@@ -337,6 +376,7 @@ def message_summary(
     text_limit: int = MESSAGE_TEXT_LIMIT,
     chat: PeerRef | None = None,
     read: ReadPointers | None = None,
+    senders: Mapping[int, Any] | None = None,
 ) -> dict[str, Any]:
     """One message, flattened.
 
@@ -347,9 +387,17 @@ def message_summary(
     Telethon entity because the only thing a permalink needs is the resolved id
     and the username, both of which the caller has already computed — and a
     plain dataclass keeps this function testable without Telethon.
+
+    ``senders`` covers messages that did not come from Telethon's high-level
+    helpers. A raw API response carries its people in a separate ``users`` list
+    and never attaches them to the messages, so ``message.sender`` is ``None``
+    and the row would name nobody — which for a mention is the one field that
+    matters. Keyed by the same marked id ``sender_id`` reports.
     """
     text, clipped = _clip(getattr(message, "message", None), text_limit)
     sender = getattr(message, "sender", None)
+    if sender is None and senders:
+        sender = senders.get(getattr(message, "sender_id", None))
     forward = getattr(message, "forward", None)
     message_id = getattr(message, "id", None)
     topic_id = topic_id_of(message)
@@ -406,6 +454,10 @@ def dialog_summary(dialog: Any) -> dict[str, Any]:
         "username": getattr(entity, "username", None),
         "unread": int(getattr(dialog, "unread_count", 0) or 0),
         "mentions": int(getattr(dialog, "unread_mentions_count", 0) or 0),
+        # Unread *reactions on this account's own messages* — Telegram counts
+        # them separately from mentions, and they are the other half of "where
+        # was I actually addressed". Ranking on `unread` alone buries both.
+        "reactions": int(getattr(dialog, "unread_reactions_count", 0) or 0),
         "pinned": bool(getattr(dialog, "pinned", False)),
         "archived": bool(getattr(dialog, "archived", False)),
         "last_message_id": getattr(getattr(dialog, "message", None), "id", None),

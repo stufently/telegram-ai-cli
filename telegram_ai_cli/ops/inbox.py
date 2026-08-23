@@ -7,11 +7,17 @@ returns a compact summary: one row per waiting conversation, ordered by how
 much it looks like someone is waiting, across every permitted account.
 
 The counts come from the dialog list itself. Telegram already tracks unread
-totals and unread mentions per dialog — mentions being the field that also
-covers replies to this account — so the whole answer is one cheap call per
-account rather than a history fetch per chat. Nothing is downloaded, nothing is
-opened, and nothing is acknowledged: the badge on the user's own phone looks
-exactly the same afterwards.
+totals, unread mentions and unread reactions per dialog — mentions being the
+field that also covers replies to this account — so the whole answer is one
+cheap call per account rather than a history fetch per chat. Nothing is
+downloaded, nothing is opened, and nothing is acknowledged: the badge on the
+user's own phone looks exactly the same afterwards.
+
+Ranking uses all three, in that order. Mentions and reactions are somebody
+addressing *this account*; unread volume is a chat being busy, which is a
+different thing and a weaker one. ``telegram_mentions`` answers the same
+question in full — which messages, from whom — where this operation only
+counts.
 """
 
 from __future__ import annotations
@@ -54,19 +60,40 @@ class InboxInput(ReadInput):
 
 
 def _waiting(row: dict[str, Any], *, mentions_only: bool) -> bool:
+    """Whether anything in this conversation is addressed to, or for, this account.
+
+    ``mentions_only`` stays strictly about mentions. A reaction counts as
+    something waiting in the default view — it is a person responding to this
+    account — but a caller who asked for mentions asked for mentions, and
+    quietly widening the filter would make the flag mean something else.
+    """
     if mentions_only:
         return row["mentions"] > 0
-    return row["unread"] > 0 or row["mentions"] > 0
+    return row["unread"] > 0 or row["mentions"] > 0 or row.get("reactions", 0) > 0
 
 
-def _rank(row: dict[str, Any]) -> tuple[int, int, str]:
-    """Mentions first, then volume, then recency.
+def _rank(row: dict[str, Any]) -> tuple[int, int, int, str]:
+    """Mentions, then reactions, then volume, then longest waiting.
 
     A direct mention is a person addressing this account; a hundred unread
     messages in a busy group usually is not. Sorting purely by unread count
     buries the one message that was actually for you.
+
+    An unread reaction lands between the two, and above volume deliberately:
+    somebody reacting to this account's own message is still a response *to
+    this account*, where a busy group is only a busy group. It ranks below a
+    mention because a reaction rarely needs an answer and a mention usually
+    does. ``telegram_mentions`` is the operation that shows both in full.
     """
-    return (-row["mentions"], -row["unread"], row.get("last_message_at") or "")
+    # The last key is ascending on purpose, so the *oldest* untouched
+    # conversation wins a tie: between two chats with one unread message each,
+    # the one that has been waiting since Tuesday is the more overdue.
+    return (
+        -row["mentions"],
+        -row.get("reactions", 0),
+        -row["unread"],
+        row.get("last_message_at") or "",
+    )
 
 
 async def _sweep_account(
@@ -160,6 +187,7 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
         "conversations": len(collected),
         "unread": sum(row["unread"] for row in collected),
         "mentions": sum(row["mentions"] for row in collected),
+        "reactions": sum(row.get("reactions", 0) for row in collected),
         "accounts": len(labels),
     }
 
@@ -181,9 +209,11 @@ INBOX = REGISTRY.register(
         mcp_tool="telegram_inbox",
         summary="What is waiting for a reply right now, across every account.",
         description=(
-            "A compact, ranked summary of conversations with unread messages or "
-            "mentions — one row per chat, not raw history. Mentions rank above volume. "
-            "Reading the inbox never marks anything as seen."
+            "A compact, ranked summary of conversations with unread messages, mentions "
+            "or reactions — one row per chat, not raw history. Mentions rank first, then "
+            "unread reactions on this account's own messages, then volume. Use "
+            "telegram_mentions to see the messages behind those two counts. Reading the "
+            "inbox never marks anything as seen."
         ),
         input_model=InboxInput,
         effect=Effect.READ,

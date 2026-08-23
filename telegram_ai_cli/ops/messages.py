@@ -40,18 +40,16 @@ from ._client import open_account
 from ._common import (
     ReadInput,
     guard_hard_denied,
-    iso,
     require_peer,
     telegram_errors,
     telegram_result,
 )
 from ._serialize import (
-    marked_id,
     message_link,
     peer_ref,
     peer_summary,
-    reaction_kind,
     reactions_summary,
+    recent_reactors,
     topic_id_of,
 )
 from .chats import guard_message_link, message_id_from, resolve_chat_ref
@@ -76,32 +74,6 @@ class MessageReactionsInput(ReadInput):
         ge=1,
         description="Id of the message. Omit when the chat argument is a link to it.",
     )
-
-
-def _recent(reactions: Any) -> list[dict[str, Any]] | None:
-    """The handful of reactors Telegram attaches to the message itself."""
-    recent = getattr(reactions, "recent_reactions", None)
-    if not recent:
-        return None
-    rows: list[dict[str, Any]] = []
-    for item in recent:
-        reaction = getattr(item, "reaction", None)
-        custom = getattr(reaction, "document_id", None)
-        peer = getattr(item, "peer_id", None)
-        try:
-            peer_id = marked_id(peer) if peer is not None else None
-        except Exception:  # noqa: BLE001 - an unknown peer shape is not fatal
-            peer_id = None
-        rows.append(
-            {
-                "peer_id": peer_id,
-                "kind": reaction_kind(reaction),
-                "emoji": getattr(reaction, "emoticon", None),
-                "custom_emoji_id": str(custom) if custom is not None else None,
-                "date": iso(getattr(item, "date", None)),
-            }
-        )
-    return rows
 
 
 async def handle_message_reactions(
@@ -134,7 +106,7 @@ async def handle_message_reactions(
                 "available": can_see_list,
                 "reason": None if can_see_list else _LIST_UNAVAILABLE,
             },
-            "recent": _recent(reactions),
+            "recent": recent_reactors(reactions),
         }
 
     return telegram_result(
