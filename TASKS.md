@@ -38,6 +38,15 @@ is
       fixture; promoting one to `conftest.py` is what would let the cases above
       be written, and would stop the fourth from being written from scratch.
 
+- [ ] **"Muted" is read per chat, never from the account's defaults.**
+      `folders.dialog_is_muted` (formerly `inbox._is_muted`) reports muted only
+      where the dialog carries its own `notify_settings`; Telegram's model is
+      that an absent peer override means the *global* default applies, which
+      `account.getNotifySettings` would supply. So an account that muted all
+      groups globally has its inbox and every `exclude_muted` folder answer as
+      though nothing were muted. Pre-dates the folder work (raised by review,
+      2026-08-23); fixing it means one more call per sweep, cached per account.
+
 - [ ] **A folder narrows only the two dialog listings.** `chats.list` and
       `inbox.list` take `folder`; `search`, `mentions` and `drafts` walk chats
       too and do not. The filter itself is reusable (`folders.facts_of` plus

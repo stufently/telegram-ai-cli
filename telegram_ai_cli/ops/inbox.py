@@ -22,7 +22,6 @@ counts.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import Field
@@ -42,6 +41,7 @@ from ._common import (
     telegram_result,
 )
 from ._serialize import dialog_summary, peer_ref, preview_of
+from .folders import FOLDER_FIELD_DESCRIPTION, dialog_is_muted, facts_of, folder_for
 
 
 class InboxInput(ReadInput):
@@ -57,6 +57,7 @@ class InboxInput(ReadInput):
         description="Only conversations where this account was mentioned or replied to.",
     )
     include_muted: bool = Field(default=False, description="Include chats the user has muted.")
+    folder: str | None = Field(default=None, description=FOLDER_FIELD_DESCRIPTION)
 
 
 def _waiting(row: dict[str, Any], *, mentions_only: bool) -> bool:
@@ -106,6 +107,14 @@ async def _sweep_account(
     hidden = 0
 
     async with open_account(ctx, label) as account:
+        # Folders belong to an account, so each one in the sweep resolves the
+        # name for itself. An account that has no such folder fails here, and
+        # the caller is told which one rather than being handed a short list.
+        folder = (
+            await folder_for(account.client, params.folder, what=f"inbox {label}")
+            if params.folder
+            else None
+        )
         with telegram_errors(what=f"inbox {label}"):
             scanned = 0
             async for dialog in account.client.iter_dialogs(ignore_migrated=True):
@@ -122,7 +131,11 @@ async def _sweep_account(
                 if ref.is_private and not params.include_private:
                     hidden += 1
                     continue
-                if not params.include_muted and _is_muted(dialog):
+                if not params.include_muted and dialog_is_muted(dialog):
+                    continue
+                # After the floor and the enumeration switches, never before:
+                # a folder narrows what policy already permits.
+                if folder is not None and not folder.contains(facts_of(dialog, entity, ref)):
                     continue
 
                 row = dialog_summary(dialog)
@@ -137,27 +150,6 @@ async def _sweep_account(
     return rows, hidden
 
 
-def _is_muted(dialog: Any) -> bool:
-    """Whether the user silenced this chat on their own devices.
-
-    Muting is the user's own statement that this conversation is not urgent, so
-    honouring it is what keeps the summary short enough to be worth reading.
-    """
-    raw = getattr(dialog, "dialog", None)
-    notify = getattr(raw, "notify_settings", None)
-    if notify is None:
-        return False
-    if getattr(notify, "silent", False):
-        return True
-    until = getattr(notify, "mute_until", None)
-    if isinstance(until, datetime):
-        # Telegram stores a mute as an expiry, and a past expiry means the
-        # chat is audible again. Treating any value as "muted" would hide
-        # conversations that stopped being muted months ago.
-        return until > datetime.now(tz=until.tzinfo or UTC)
-    return bool(until)
-
-
 async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
     require_enumeration(ctx, private=params.include_private, action="inbox")
 
@@ -170,7 +162,11 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
         try:
             rows, hidden = await _sweep_account(ctx, label, params)
         except Exception as exc:  # noqa: BLE001 - one bad account must not blank the fleet
-            warnings.append(f"{label}: {type(exc).__name__}")
+            # This project's own errors carry a sentence written for a person;
+            # a bare class name turns "this account has no folder called Work"
+            # into "NotFound", which is not an answer anybody can act on.
+            detail = getattr(exc, "message", None)
+            warnings.append(f"{label}: {detail or type(exc).__name__}")
             continue
         collected.extend(rows)
         hidden_total += hidden

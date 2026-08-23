@@ -185,6 +185,12 @@ offered as a filter. Capability: `enumerate`.
 | `include_peers`, `exclude_peers`, `pinned_peers` | Chats named individually, as marked ids |
 | `hidden_peers` | How many named chats are **not** listed here, because the hard floor closes them or they are private and DM enumeration is off |
 
+`folder` accepts an id or a name. The id is tried first, and a name matches
+case-insensitively — exactly, then as a substring, refusing rather than guessing
+when two folders fit. A number that matches no id falls back to an *exact* title
+only, so a folder genuinely called `2` is reachable while `Work 2024` is not
+picked by typing `2`.
+
 **A folder is not a permission.** It is a list a user wrote, and it can name any
 chat the account can see — Saved Messages, Service Notifications, private
 conversations this configuration does not enumerate. So filtering by one runs
@@ -192,6 +198,15 @@ conversations this configuration does not enumerate. So filtering by one runs
 remove rows, never add one. The same rule applies to this listing, which is why
 `hidden_peers` exists — a folder that names a closed chat reports a count, not
 the id.
+
+**Saved Messages is the case that needs one extra call.** A folder containing it
+stores the account's *own user id* — an ordinary positive number, and telling it
+from a friend's id is impossible without knowing who the account is. So when
+`include_private` is on and a folder names any private chat, `get_me` is called
+once and that id is withheld like any other closed chat. With `include_private`
+off — the default — every positive id is withheld anyway and no such call is
+made. A peer stored as `InputPeerSelf`, which carries no id at all, is counted
+in `hidden_peers` rather than dropped.
 
 **"All chats" is not a folder.** Telegram models it as `DialogFilterDefault`,
 which carries no id and no rules; it is skipped rather than offered as a filter
@@ -207,6 +222,12 @@ Membership is decided here, not by Telegram: there is no request that answers
 (`ops/folders.py`). Naming a chat is the more specific statement, so a chat in
 `include_peers` stays in the folder even when `exclude_muted` would have
 withheld it — but `exclude_peers` beats everything.
+
+Two withholding flags are narrower than their names, and the official clients
+agree: `exclude_muted` keeps a muted chat that has an **unread mention** — muting
+a group is a statement about its chatter, not about being addressed by name —
+and `exclude_read` honours **"mark as unread"** as well as the unread and mention
+counters.
 
 ### `telegram_chat_read` — `tg-ai chat read`
 

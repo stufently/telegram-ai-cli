@@ -24,14 +24,24 @@ before that, breaking changes can happen on any `0.x` release.
   does not enumerate changes none of those answers, and the folder listing
   itself reports such chats as a `hidden_peers` count rather than an id.
   `tests/test_folders.py` drives the real handlers to prove it.
+  Saved Messages needed one more turn of the screw: a folder that contains it
+  stores the account's *own user id*, an ordinary positive number that no rule
+  can recognise without knowing whose account this is. When DM enumeration is on
+  and a folder names any private chat, `get_me` supplies it and the id is
+  withheld like any other closed chat; with enumeration off — the default — every
+  positive id is withheld anyway and the call is not made. An `InputPeerSelf`,
+  which carries no id at all, is counted rather than dropped.
   Membership is decided client-side (there is no request that answers "is this
   dialog in that folder"), so the whole rule is a pure function over plain facts
   with a test per branch: `exclude_peers` beats everything, a chat the user
   named survives `exclude_muted`, a bot arrives through `bots` and not through
   `contacts`, and a shareable `DialogFilterChatlist` — which carries no flags at
-  all — admits nothing it was not given. "All chats" (`DialogFilterDefault`) is
-  skipped rather than offered as a filter that filters nothing, and an account
-  with no folders gets an empty list plus a warning saying so, never an error.
+  all — admits nothing it was not given. Two withholding flags are narrower than
+  their names, as in the official clients: `exclude_muted` keeps a muted chat
+  with an unread *mention*, and `exclude_read` honours "mark as unread".
+  "All chats" (`DialogFilterDefault`) is skipped rather than offered as a filter
+  that filters nothing, and an account with no folders gets an empty list plus a
+  warning saying so, never an error.
 - `telegram_mentions` / `tg-ai mentions` — unread **mentions** and unread
   **reactions**, which Telegram counts separately from plain unread and which
   are the only two counters that mean *somebody addressed this account*. One row

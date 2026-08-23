@@ -58,6 +58,7 @@ from ._serialize import (
     peer_ref,
     peer_summary,
 )
+from .folders import FOLDER_FIELD_DESCRIPTION, facts_of, folder_for
 
 #: Said out loud instead of leaving `read_by_peer` null with no explanation.
 NO_PEER_RECEIPTS = (
@@ -78,6 +79,7 @@ class ChatsInput(ReadInput):
         description="Include one-to-one conversations (requires safety.read.enumerate_dms).",
     )
     archived: bool = Field(default=False, description="List the archive instead of the main list.")
+    folder: str | None = Field(default=None, description=FOLDER_FIELD_DESCRIPTION)
 
 
 class ChatReadInput(ReadInput):
@@ -359,6 +361,14 @@ async def handle_chats(ctx: OperationContext, params: ChatsInput) -> Envelope:
     hidden = 0
 
     async with open_account(ctx, params.account) as account:
+        # Resolved before the sweep, and only when one was asked for: the extra
+        # round trip is not paid by every listing, and an unknown folder name
+        # fails before a thousand dialogs are walked for nothing.
+        folder = (
+            await folder_for(account.client, params.folder, what="chats.list")
+            if params.folder
+            else None
+        )
         with telegram_errors(what="chats.list"):
             async for dialog in account.client.iter_dialogs(
                 archived=params.archived,
@@ -381,6 +391,12 @@ async def handle_chats(ctx: OperationContext, params: ChatsInput) -> Envelope:
                 if ref.is_private and not params.include_private:
                     hidden += 1
                     continue
+                # Last, and never earlier: a folder is the user's own sorting,
+                # not a permission. It may only remove rows the policy above
+                # already allowed — a chat it names but the floor or the DM
+                # switch excludes stays excluded.
+                if folder is not None and not folder.contains(facts_of(dialog, entity, ref)):
+                    continue
 
                 row = dialog_summary(dialog)
                 if needle:
@@ -398,6 +414,14 @@ async def handle_chats(ctx: OperationContext, params: ChatsInput) -> Envelope:
     if hidden:
         warnings.append(f"{hidden} private chat(s) omitted; enumeration of direct messages is off")
     truncated = matched > len(rows) or scanned >= MAX_DIALOG_SCAN
+    extra: dict[str, Any] = {}
+    if scanned >= MAX_DIALOG_SCAN:
+        extra["scanned"] = scanned
+    if folder is not None:
+        # The id, not the name: `meta` is this tool's own words about the
+        # answer, and a folder title is a string a person typed on their
+        # account — it belongs in the payload, behind the untrusted markers.
+        extra["folder_id"] = folder.id
     return telegram_result(
         ctx,
         {"chats": rows},
@@ -407,7 +431,7 @@ async def handle_chats(ctx: OperationContext, params: ChatsInput) -> Envelope:
         truncated=truncated,
         truncated_reason="limit",
         warnings=warnings,
-        extra={"scanned": scanned} if scanned >= MAX_DIALOG_SCAN else None,
+        extra=extra or None,
     )
 
 
