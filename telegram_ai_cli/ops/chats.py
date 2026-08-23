@@ -58,7 +58,13 @@ from ._serialize import (
     peer_ref,
     peer_summary,
 )
-from .folders import FOLDER_FIELD_DESCRIPTION, facts_of, folder_for
+from .folders import (
+    AUDIBLE,
+    FOLDER_FIELD_DESCRIPTION,
+    facts_of,
+    folder_for,
+    load_notify_defaults,
+)
 
 #: Said out loud instead of leaving `read_by_peer` null with no explanation.
 NO_PEER_RECEIPTS = (
@@ -370,6 +376,14 @@ async def handle_chats(ctx: OperationContext, params: ChatsInput) -> Envelope:
             if params.folder
             else None
         )
+        # Only a folder can ask whether a chat is muted here, and only one that
+        # excludes muted chats actually asks — so the account's defaults are
+        # fetched on exactly that condition, once for the sweep.
+        defaults = (
+            await load_notify_defaults(account.client, what="chats.list")
+            if folder is not None and folder.flags.exclude_muted
+            else AUDIBLE
+        )
         with telegram_errors(what="chats.list"):
             async for dialog in account.client.iter_dialogs(
                 archived=params.archived,
@@ -396,7 +410,9 @@ async def handle_chats(ctx: OperationContext, params: ChatsInput) -> Envelope:
                 # not a permission. It may only remove rows the policy above
                 # already allowed — a chat it names but the floor or the DM
                 # switch excludes stays excluded.
-                if folder is not None and not folder.contains(facts_of(dialog, entity, ref)):
+                if folder is not None and not folder.contains(
+                    facts_of(dialog, entity, ref, defaults)
+                ):
                     continue
 
                 row = dialog_summary(dialog)

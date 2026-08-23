@@ -41,7 +41,14 @@ from ._common import (
     telegram_result,
 )
 from ._serialize import dialog_summary, peer_ref, preview_of
-from .folders import FOLDER_FIELD_DESCRIPTION, dialog_is_muted, facts_of, folder_for
+from .folders import (
+    AUDIBLE,
+    FOLDER_FIELD_DESCRIPTION,
+    dialog_is_muted,
+    facts_of,
+    folder_for,
+    load_notify_defaults,
+)
 
 
 class InboxInput(ReadInput):
@@ -115,6 +122,20 @@ async def _sweep_account(
             if params.folder
             else None
         )
+        # Whether a chat is muted can only be answered against these, and they
+        # belong to the account rather than to any dialog — so they are fetched
+        # once, before the sweep, not per row. And only where something asks:
+        # `include_muted` with no muted-excluding folder never puts the
+        # question, and three requests for an answer nobody reads are three
+        # ways for the listing to fail.
+        asks_about_muted = not params.include_muted or (
+            folder is not None and folder.flags.exclude_muted
+        )
+        defaults = (
+            await load_notify_defaults(account.client, what=f"inbox {label}")
+            if asks_about_muted
+            else AUDIBLE
+        )
         with telegram_errors(what=f"inbox {label}"):
             scanned = 0
             async for dialog in account.client.iter_dialogs(ignore_migrated=True):
@@ -131,11 +152,13 @@ async def _sweep_account(
                 if ref.is_private and not params.include_private:
                     hidden += 1
                     continue
-                if not params.include_muted and dialog_is_muted(dialog):
+                if not params.include_muted and dialog_is_muted(dialog, ref, defaults):
                     continue
                 # After the floor and the enumeration switches, never before:
                 # a folder narrows what policy already permits.
-                if folder is not None and not folder.contains(facts_of(dialog, entity, ref)):
+                if folder is not None and not folder.contains(
+                    facts_of(dialog, entity, ref, defaults)
+                ):
                     continue
 
                 row = dialog_summary(dialog)

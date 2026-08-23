@@ -34,6 +34,7 @@ folder with fewer rules rather than raising.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -360,28 +361,118 @@ async def folder_for(client: Any, token: str, *, what: str) -> FolderView:
 # --- facts about a dialog ---------------------------------------------------
 
 
-def dialog_is_muted(dialog: Any) -> bool:
-    """Whether the user silenced this chat on their own devices.
+def _notify_says_muted(notify: Any) -> bool | None:
+    """What one ``PeerNotifySettings`` states, or ``None`` when it states nothing.
 
-    Muting is the user's own statement that a conversation is not urgent, which
-    is why both the inbox and the ``exclude_muted`` folder flag ask it. Telegram
-    stores a mute as an *expiry*, and a past expiry means the chat is audible
-    again — treating any value as "muted" hides conversations that stopped being
-    muted months ago.
+    Telegram stores a mute as an *expiry*, and a past expiry means the chat is
+    audible again — treating any value as "muted" hides conversations that
+    stopped being muted months ago. The three-valued answer matters just as
+    much: a peer that overrides nothing is not "not muted", it is "whatever the
+    account's default for this kind of peer says", and the two are opposite
+    answers for anyone who muted all their groups at once.
+
+    ``silent`` is read as the mute switch it is declared to be. The schema calls
+    it a *ternary* value that "indicates whether to mute or unmute the peer;
+    otherwise the default behavior should be used" — which is this function's
+    three answers, in the schema's own words. A review read it as the separate
+    "silent posts" flag some clients keep under that name; the constructor
+    documentation is the authority for what the wire means, and it disagrees.
     """
-    raw = getattr(dialog, "dialog", None)
-    notify = getattr(raw, "notify_settings", None)
     if notify is None:
-        return False
-    if getattr(notify, "silent", False):
-        return True
+        return None
+    silent = getattr(notify, "silent", None)
     until = getattr(notify, "mute_until", None)
+    if silent is None and until is None:
+        return None
+    if silent:
+        return True
+    if until is None:
+        return False
     if isinstance(until, datetime):
         return until > datetime.now(tz=until.tzinfo or UTC)
+    # Telethon hands over a datetime; a raw epoch is what a different client
+    # library — or a test — would pass, and `bool(seconds)` would call every
+    # long-expired mute a live one.
+    if isinstance(until, int):
+        return until > time.time()
     return bool(until)
 
 
-def facts_of(dialog: Any, entity: Any, ref: PeerRef) -> DialogFacts:
+@dataclass(frozen=True)
+class NotifyDefaults:
+    """The account's mute setting for each kind of peer it has no override for.
+
+    Telegram's own clients show three switches — private chats, groups,
+    channels — and a chat with no settings of its own follows the one for its
+    kind. Reading only the per-chat settings answers "nothing is muted" for an
+    account that silenced every group in one gesture, which is the opposite of
+    what its owner said.
+    """
+
+    users: bool = False
+    chats: bool = False
+    broadcasts: bool = False
+
+    def for_kind(self, kind: PeerKind) -> bool:
+        """The default a chat of this kind inherits.
+
+        Decided from the resolved peer rather than from Telethon's ``Dialog``
+        flags: a megagroup answers yes to both ``is_group`` and ``is_channel``,
+        and the same resolution the rest of the policy uses is the one that
+        should decide this.
+        """
+        if kind in {PeerKind.USER, PeerKind.SELF, PeerKind.SERVICE}:
+            return self.users
+        if kind is PeerKind.GROUP:
+            return self.chats
+        if kind is PeerKind.CHANNEL:
+            return self.broadcasts
+        # A peer this build cannot classify is left audible. Guessing wrong in
+        # the other direction hides a conversation, and a hidden conversation
+        # looks exactly like one that never arrived.
+        return False
+
+
+#: What to pass where nothing asks whether a chat is muted. Not a guess at the
+#: account's settings — a statement that the question was never put, which is
+#: why the listings that use it are the ones that never read the answer.
+AUDIBLE = NotifyDefaults()
+
+
+async def load_notify_defaults(client: Any, *, what: str) -> NotifyDefaults:
+    """Fetch the three global switches, once for a whole sweep.
+
+    One request per kind, and there are three kinds. It is done per listing
+    rather than per dialog because the answer is a property of the account, and
+    per listing rather than cached across calls because a mute made between two
+    calls should be visible to the second one.
+    """
+    from telethon.tl import functions
+    from telethon.tl import types as tl
+
+    with telegram_errors(what=what):
+        answers = [
+            await client(functions.account.GetNotifySettingsRequest(peer=peer))
+            for peer in (tl.InputNotifyUsers(), tl.InputNotifyChats(), tl.InputNotifyBroadcasts())
+        ]
+    # Nothing to inherit from at this level, so "states nothing" is "audible".
+    return NotifyDefaults(*[bool(_notify_says_muted(answer)) for answer in answers])
+
+
+def dialog_is_muted(dialog: Any, ref: PeerRef, defaults: NotifyDefaults) -> bool:
+    """Whether the user silenced this chat on their own devices.
+
+    Muting is the user's own statement that a conversation is not urgent, which
+    is why both the inbox and the ``exclude_muted`` folder flag ask it. The
+    chat's own setting wins; where it has none, the account's default for that
+    kind of peer *is* the setting.
+    """
+    raw = getattr(dialog, "dialog", None)
+    own = _notify_says_muted(getattr(raw, "notify_settings", None))
+    return own if own is not None else defaults.for_kind(ref.kind)
+
+
+def facts_of(dialog: Any, entity: Any, ref: PeerRef, defaults: NotifyDefaults) -> DialogFacts:
     """Everything the folder rules may ask about this dialog."""
     raw = getattr(dialog, "dialog", None)
     return DialogFacts(
@@ -390,7 +481,7 @@ def facts_of(dialog: Any, entity: Any, ref: PeerRef) -> DialogFacts:
         bot=bool(getattr(entity, "bot", False)),
         contact=bool(getattr(entity, "contact", False)),
         archived=bool(getattr(dialog, "archived", False)),
-        muted=dialog_is_muted(dialog),
+        muted=dialog_is_muted(dialog, ref, defaults),
         unread=int(getattr(dialog, "unread_count", 0) or 0),
         mentions=int(getattr(dialog, "unread_mentions_count", 0) or 0),
         # Telethon's Dialog does not surface "marked unread"; the raw dialog it
@@ -578,10 +669,13 @@ __all__ = [
     "DialogFacts",
     "FolderFlags",
     "FolderView",
+    "AUDIBLE",
     "FoldersInput",
+    "NotifyDefaults",
     "dialog_is_muted",
     "facts_of",
     "folder_for",
+    "load_notify_defaults",
     "folder_summary",
     "handle_folders",
     "input_peer_id",

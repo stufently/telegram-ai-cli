@@ -952,6 +952,20 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **"Muted" was read from the chat alone, so muting a whole category counted
+  for nothing.** Telegram keeps three global switches — private chats, groups,
+  channels — and a chat with no notification settings of its own follows the
+  one for its kind. `dialog_is_muted` treated an absent override as "not
+  muted", so an account whose owner silenced every group in one gesture had an
+  inbox that answered as though nothing were muted, and every `exclude_muted`
+  folder withheld nothing. The per-chat setting still wins where there is one,
+  in both directions: a chat unmuted on purpose inside a muted category stays
+  audible. The defaults are fetched once per listing rather than per dialog,
+  and only where a filter actually asks: `include_muted` with no muted-excluding
+  folder, and a folder that does not exclude muted chats, make no extra request
+  at all — three requests for an answer nobody reads would be three more ways
+  for a listing to fail.
+
 - **The MCP smoke test outgrew its own read buffer.** `scripts/smoke_mcp.py`
   reads one JSON-RPC message per line with `StreamReader.readline`, whose
   default limit is 64 KiB — and a `tools/list` answer carries the description

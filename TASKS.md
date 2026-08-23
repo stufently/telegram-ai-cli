@@ -157,15 +157,6 @@ is
       the cost the watermark exists to avoid. Worth doing only as an explicit
       `archive resync --chat` that a person asks for.
 
-- [ ] **"Muted" is read per chat, never from the account's defaults.**
-      `folders.dialog_is_muted` (formerly `inbox._is_muted`) reports muted only
-      where the dialog carries its own `notify_settings`; Telegram's model is
-      that an absent peer override means the *global* default applies, which
-      `account.getNotifySettings` would supply. So an account that muted all
-      groups globally has its inbox and every `exclude_muted` folder answer as
-      though nothing were muted. Pre-dates the folder work (raised by review,
-      2026-08-23); fixing it means one more call per sweep, cached per account.
-
 - [ ] **A folder narrows only the two dialog listings.** `chats.list` and
       `inbox.list` take `folder`; `search`, `mentions` and `drafts` walk chats
       too and do not. The filter itself is reusable (`folders.facts_of` plus
@@ -510,6 +501,13 @@ is
       answer rather than a blanket one. The types a message can actually be
       *edited* into — photo and document — are covered. Raised by review,
       2026-08-23.
+- [ ] **An account the inbox could not read is counted as one it read.** A
+      sweep that fails for one account records a warning and moves on, which is
+      right for a fleet — but `totals.accounts` counts it anyway, so "3
+      accounts, 0 waiting" can mean two quiet inboxes and one that never
+      answered. A single named account arguably should not degrade at all, and
+      a fleet should report how many of the accounts the number came from.
+      Raised by review, 2026-08-23.
 
 ## Decisions
 

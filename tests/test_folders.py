@@ -454,11 +454,15 @@ class FakeDialog:
 
 
 class FakeClient:
-    """Just enough client for a read handler: dialogs, and one request."""
+    """Just enough client for a read handler: dialogs, folders, mute defaults."""
 
-    def __init__(self, dialogs: list[Any], filters: Any) -> None:
+    def __init__(self, dialogs: list[Any], filters: Any, notify: Any = None) -> None:
         self._dialogs = dialogs
         self._filters = filters
+        #: What `account.getNotifySettings` answers, by the switch asked about.
+        #: An account that has changed nothing answers with settings that say
+        #: nothing, which is what the empty default stands for here.
+        self._notify: dict[str, Any] = notify or {}
         self.requests: list[Any] = []
         self.asked_who_i_am = 0
 
@@ -482,7 +486,13 @@ class FakeClient:
         return stream()
 
     async def __call__(self, request: Any) -> Any:
+        from telethon.tl import functions
+        from telethon.tl import types as tl
+
         self.requests.append(request)
+        if isinstance(request, functions.account.GetNotifySettingsRequest):
+            switch = type(request.peer).__name__.removeprefix("InputNotify").lower()
+            return self._notify.get(switch, tl.PeerNotifySettings())
         return self._filters
 
 
@@ -620,6 +630,200 @@ async def test_the_inbox_can_be_narrowed_to_a_folder(tmp_path) -> None:
     envelope = await handle_inbox(ctx, InboxInput(folder="Groups"))
 
     assert [row["chat_id"] for row in envelope.data["waiting"]] == [GROUP_ID]
+
+
+# --- muted is a question about the account, not only about the chat ---------
+
+
+def _muted_switch() -> Any:
+    """A global switch someone turned on, in the shape Telegram sends it."""
+    from telethon.tl import types as tl
+
+    return tl.PeerNotifySettings(silent=True)
+
+
+@pytest.mark.asyncio
+async def test_a_globally_muted_kind_of_chat_stays_out_of_the_inbox(tmp_path) -> None:
+    """One gesture mutes every group, and no group carries a setting of its own.
+
+    Reading only per-chat settings answers "nothing is muted" here, which is the
+    opposite of what the account's owner said.
+    """
+    group, _friend, _service = telegram_entities()
+    client = FakeClient(
+        [FakeDialog(entity=group, unread_count=3)],
+        everything_folder(),
+        notify={"chats": _muted_switch()},
+    )
+    ctx = context(tmp_path, client)
+
+    envelope = await handle_inbox(ctx, InboxInput())
+
+    assert envelope.data["waiting"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_global_switch_applies_only_to_its_own_kind(tmp_path) -> None:
+    """Muting every group says nothing about channels."""
+    from telethon.tl.types import Channel
+
+    group, _friend, _service = telegram_entities()
+    news = Channel(id=4343, title="News", photo=None, date=None, broadcast=True)
+    client = FakeClient(
+        [FakeDialog(entity=group, unread_count=3), FakeDialog(entity=news, unread_count=7)],
+        everything_folder(),
+        notify={"chats": _muted_switch()},
+    )
+    ctx = context(tmp_path, client)
+
+    envelope = await handle_inbox(ctx, InboxInput())
+
+    from telethon import utils
+
+    assert [row["chat_id"] for row in envelope.data["waiting"]] == [utils.get_peer_id(news)]
+
+
+@pytest.mark.asyncio
+async def test_a_chat_unmuted_on_purpose_beats_the_global_switch(tmp_path) -> None:
+    """The per-chat setting is the more specific statement, either way it points."""
+    from telethon.tl import types as tl
+
+    group, _friend, _service = telegram_entities()
+    client = FakeClient(
+        [
+            FakeDialog(
+                entity=group,
+                unread_count=3,
+                dialog=FakeRawDialog(notify_settings=tl.PeerNotifySettings(silent=False)),
+            )
+        ],
+        everything_folder(),
+        notify={"chats": _muted_switch()},
+    )
+    ctx = context(tmp_path, client)
+
+    envelope = await handle_inbox(ctx, InboxInput())
+
+    assert [row["chat_id"] for row in envelope.data["waiting"]] == [GROUP_ID]
+
+
+@pytest.mark.asyncio
+async def test_an_expired_mute_is_not_a_mute(tmp_path) -> None:
+    """Telegram stores a mute as an expiry, and a past one means audible again."""
+    from telethon.tl import types as tl
+
+    group, _friend, _service = telegram_entities()
+    client = FakeClient(
+        [
+            FakeDialog(
+                entity=group,
+                unread_count=3,
+                dialog=FakeRawDialog(
+                    notify_settings=tl.PeerNotifySettings(
+                        mute_until=datetime(2020, 1, 1, tzinfo=UTC)
+                    )
+                ),
+            )
+        ],
+        everything_folder(),
+    )
+    ctx = context(tmp_path, client)
+
+    envelope = await handle_inbox(ctx, InboxInput())
+
+    assert [row["chat_id"] for row in envelope.data["waiting"]] == [GROUP_ID]
+
+
+@pytest.mark.asyncio
+async def test_a_far_future_mute_is_the_other_shape_of_the_same_switch(tmp_path) -> None:
+    """Clients mute "forever" by writing an expiry far ahead, not only by flag.
+
+    Both shapes are the account's global switch for groups, and the inbox has
+    to read either one.
+    """
+    from telethon.tl import types as tl
+
+    group, _friend, _service = telegram_entities()
+    client = FakeClient(
+        [FakeDialog(entity=group, unread_count=3)],
+        everything_folder(),
+        notify={"chats": tl.PeerNotifySettings(mute_until=datetime(2099, 1, 1, tzinfo=UTC))},
+    )
+    ctx = context(tmp_path, client)
+
+    envelope = await handle_inbox(ctx, InboxInput())
+
+    assert envelope.data["waiting"] == []
+
+
+@pytest.mark.asyncio
+async def test_asking_for_muted_chats_asks_telegram_nothing_extra(tmp_path) -> None:
+    """Three requests for an answer nobody reads are three ways to fail."""
+    group, _friend, _service = telegram_entities()
+    client = FakeClient([FakeDialog(entity=group, unread_count=3)], everything_folder())
+    ctx = context(tmp_path, client)
+
+    await handle_inbox(ctx, InboxInput(include_muted=True))
+
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_folder_that_excludes_muted_uses_the_global_switch(tmp_path) -> None:
+    """The same inheritance, on the other listing and through a folder rule."""
+    group, _friend, _service = telegram_entities()
+    client = FakeClient(
+        [FakeDialog(entity=group)],
+        FakeFilterList([FakeFilter(id=2, title="Loud", groups=True, exclude_muted=True)]),
+        notify={"chats": _muted_switch()},
+    )
+    ctx = context(tmp_path, client)
+
+    envelope = await handle_chats(ctx, ChatsInput(folder="Loud"))
+
+    assert envelope.data["chats"] == []
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, None),
+        ({"silent": True}, True),
+        ({"silent": False}, False),
+        ({"mute_until": datetime(2099, 1, 1, tzinfo=UTC)}, True),
+        ({"mute_until": datetime(2020, 1, 1, tzinfo=UTC)}, False),
+        ({"silent": False, "mute_until": datetime(2099, 1, 1, tzinfo=UTC)}, True),
+    ],
+    ids=["says-nothing", "muted", "unmuted", "until-future", "until-past", "unmuted-but-until"],
+)
+def test_what_one_settings_object_states(settings: dict[str, Any], expected: bool | None) -> None:
+    """The three answers, in the shape Telegram sends them.
+
+    `None` is not `False`: it is the difference between "this chat is audible"
+    and "this chat has not been given an opinion of its own".
+    """
+    from telethon.tl import types as tl
+
+    from telegram_ai_cli.ops.folders import _notify_says_muted
+
+    assert _notify_says_muted(tl.PeerNotifySettings(**settings)) is expected
+
+
+@pytest.mark.parametrize(
+    ("until", "expected"),
+    [(0, False), (1600000000, False), (4102444800, True)],
+    ids=["epoch", "long-past", "far-future"],
+)
+def test_an_expiry_that_arrives_as_a_number_is_still_an_expiry(until: int, expected: bool) -> None:
+    """Telethon hands over a datetime. Another library, or a fixture, may not —
+    and `bool(seconds)` would call every long-expired mute a live one."""
+    from telegram_ai_cli.ops.folders import _notify_says_muted
+
+    class RawSettings:
+        silent = None
+        mute_until = until
+
+    assert _notify_says_muted(RawSettings()) is expected
 
 
 @pytest.mark.asyncio

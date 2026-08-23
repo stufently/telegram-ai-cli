@@ -238,6 +238,15 @@ a group is a statement about its chatter, not about being addressed by name —
 and `exclude_read` honours **"mark as unread"** as well as the unread and mention
 counters.
 
+"Muted" is read the way Telegram defines it: the chat's own setting where it has
+one, and otherwise the account's default for that *kind* of chat — private,
+group, or channel, the three switches the official clients show. A chat with no
+setting of its own is not an unmuted chat; it is a chat that follows the switch.
+The defaults are fetched once per listing (three requests, and only where the
+answer is used — `include_muted` without a muted-excluding folder asks nothing),
+never per dialog, and never cached between calls: a mute made between two
+listings should be visible to the second.
+
 ### `telegram_chat_read` — `tg-ai chat read`
 
 A chat's history, newest first, with attachment metadata. Capability:
