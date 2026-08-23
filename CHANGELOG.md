@@ -794,6 +794,21 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Changed
 
+- **The README no longer claims this tool handles `noforwards`.** It did not, and
+  nothing in the repository ever implemented it — the line described a capability
+  that existed only in the documentation. What is true is now written down in
+  both places: **downloading** protected media is not blocked here and never was
+  (Telegram asks *clients* to prevent saving it, which the official apps honour
+  and a raw MTProto library does not; Telethon saves the file like any other and
+  no guard was added); **forwarding** is refused by Telegram itself with
+  `CHAT_FORWARDS_RESTRICTED`, which no client bypasses; and posting the bytes as
+  a fresh copy is `media fetch` plus `message send-file`, two plans approved
+  separately, with deliberately no one-step feature packaging them. The failure
+  is now legible rather than a raw Telethon class name:
+  `ChatForwardsRestrictedError` is classified as a server refusal that had no
+  effect — so the rate-limit slot goes back, as with every other "Telegram said
+  no" — and is reported as `FORWARDS_RESTRICTED`, saying content protection is
+  the reason and naming the source chat by its numeric id, never by its title.
 - **A `t.me` link keeps its message number.** `chat` arguments used to resolve a
   link as a chat and drop everything else, turning "look at this message" into
   "look at this chat" silently. `chat read` now anchors its page at the message

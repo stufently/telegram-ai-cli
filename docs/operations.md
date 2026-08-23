@@ -1071,8 +1071,20 @@ Notes that are not obvious from the table:
   radius, and it is out of scope for v0.1 — the refusal is recorded in the audit
   log like any other.
 - **`message.forward` checks the source and the destination separately.** They
-  are two peers and two policy decisions, and `noforwards` (protected content)
-  on the source is a real flag, not a UI hint.
+  are two peers and two policy decisions.
+- **`noforwards` (protected content) on the source is Telegram's rule, not
+  ours.** The server answers the forward with `CHAT_FORWARDS_RESTRICTED` and no
+  client can do anything about it, so the applier classifies that refusal as one
+  that had no effect — the rate-limit slot goes back — and reports it as
+  `FORWARDS_RESTRICTED`, naming the source chat by its numeric id and saying in
+  words that content protection is why. Retrying will not help. **Downloading is
+  not blocked** here and never was: what the server refuses is the forward, while
+  saving an attachment is something Telegram asks *clients* to prevent — the
+  official apps do, a raw MTProto library does not, and this project has never
+  had a guard for it. `media fetch` therefore saves the media like any other.
+  Posting those bytes elsewhere is therefore `media fetch` plus
+  `message send-file` — a fresh message of your own, with its own plan and its
+  own approval — and there is no operation that packages the two, deliberately.
 - **`chat.promote`'s `rights` is an object**, one boolean per right
   (`change_info`, `delete_messages`, `ban_users`, `invite_users`, `pin_messages`,
   `manage_call`, `manage_topics`, `add_admins`), all defaulting to off, at least

@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from .envelope import Envelope, Meta
 from .errors import (
+    ForwardsRestricted,
     InvalidInput,
     PlanPreconditionFailed,
     PlanUnknownOutcome,
@@ -183,6 +184,11 @@ def _no_effect_error_classes() -> tuple[type[BaseException], ...]:
         "UserBannedInChannelError",
         "ChannelPrivateError",
         "ChatRestrictedError",
+        # Content protection on the source chat. Enforced by the server, so the
+        # forward simply did not happen — which is why it belongs here and not
+        # in the ambiguous set: burning the rate-limit slot for a request
+        # Telegram refused outright would spend budget on nothing.
+        "ChatForwardsRestrictedError",
         # The target refused, by their own settings or their account state.
         "UserPrivacyRestrictedError",
         "UserNotMutualContactError",
@@ -1595,7 +1601,7 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
     except Exception as exc:
         if isinstance(exc, _no_effect_error_classes()):
             detail = f"{type(exc).__name__}: {exc}"
-            wrapped: TelegramAIError = _as_project_error(exc, detail)
+            wrapped: TelegramAIError = _as_project_error(exc, detail, plan)
             if event_id is not None:
                 ctx.audit.outcome(
                     event_id, status="failed", error_code=str(wrapped.code), detail=detail
@@ -1690,10 +1696,32 @@ def _settle_unknown(
     )
 
 
-def _as_project_error(exc: BaseException, detail: str) -> TelegramAIError:
-    """Translate a Telethon refusal into this project's error taxonomy."""
+def _as_project_error(exc: BaseException, detail: str, plan: Any = None) -> TelegramAIError:
+    """Translate a Telethon refusal into this project's error taxonomy.
+
+    ``plan`` is consulted only to name the chat a refusal is about, and only by
+    its numeric id: the preconditions hold one that verification re-checked a
+    moment earlier, and a chat *title* is text somebody else wrote.
+    """
     from telethon import errors
 
+    restricted = getattr(errors.rpcerrorlist, "ChatForwardsRestrictedError", None)
+    if restricted is not None and isinstance(exc, restricted):
+        source = None
+        if plan is not None:
+            source = (getattr(plan, "preconditions", None) or {}).get("source", {}).get("peer_id")
+        named = f"chat {source}" if source is not None else "the source chat"
+        return ForwardsRestricted(
+            f"Telegram refused the forward: {named} has content protection turned on "
+            "(noforwards). The server enforces that, so no client can forward out of "
+            "it and nothing was sent",
+            suggestion=(
+                "Do not retry: the answer will not change. Downloading from such a chat "
+                "is not blocked — media fetch works normally — so posting the bytes as a "
+                "fresh copy is media fetch followed by message send-file, which is a new "
+                "message of your own rather than a forward, and needs its own approval."
+            ),
+        )
     if isinstance(exc, errors.FloodWaitError):
         from .errors import FloodWait
 

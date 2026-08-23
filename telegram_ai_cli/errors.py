@@ -51,6 +51,7 @@ class ErrorCode(StrEnum):
 
     # --- upstream ---------------------------------------------------------
     FLOOD_WAIT = "FLOOD_WAIT"
+    FORWARDS_RESTRICTED = "FORWARDS_RESTRICTED"
     PEER_UNRESOLVED = "PEER_UNRESOLVED"
     PRIVACY_RESTRICTED = "PRIVACY_RESTRICTED"
     TELEGRAM_ERROR = "TELEGRAM_ERROR"
@@ -248,6 +249,21 @@ class FloodWait(TelegramAIError):
             retry_after=seconds,
             **kwargs,  # type: ignore[arg-type]
         )
+
+
+class ForwardsRestricted(TelegramAIError):
+    """The source chat has content protection on, and Telegram enforces it.
+
+    ``CHAT_FORWARDS_RESTRICTED`` is a server-side refusal: no client bypasses it,
+    and this one does not try. Given its own code because the alternative — a
+    generic Telegram error carrying a Telethon class name — tells whoever reads
+    it nothing about whether to retry, change something, or stop.
+
+    Not retryable, and nothing happened, so the rate-limit slot goes back.
+    """
+
+    code = ErrorCode.FORWARDS_RESTRICTED
+    retryable = False
 
 
 class PeerUnresolved(TelegramAIError):

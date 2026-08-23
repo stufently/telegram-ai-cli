@@ -74,6 +74,14 @@ is
       `conftest.py` is what would let the cases above be written, and would stop
       a fifth from being written from scratch again.
 
+- [ ] **The `noforwards` classification is not exercised against a live chat.**
+      `ChatForwardsRestrictedError` is in the applier's no-effect set and is
+      translated into `FORWARDS_RESTRICTED` with a message naming the source chat
+      by id; the test constructs the exception directly, because there is no
+      fixture that drives `apply_plan` against a fake Telethon raising from
+      `forward_messages`. The same missing fixture is the one the handler-level
+      gap above asks for.
+
 - [ ] **The regex time budget is POSIX- and main-thread-only.** `archive search`
       caps a pattern at 10 seconds with `SIGALRM`, which is the only
       interruption the standard library offers without a second process — and
