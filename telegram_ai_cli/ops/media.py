@@ -275,6 +275,7 @@ MEDIA_FETCH = REGISTRY.register(
         ),
         input_model=MediaFetchInput,
         effect=Effect.LOCAL_WRITE,
+        local_path="downloads",
         capability=Capability.READ_MEDIA,
         handler=handle_media_fetch,  # type: ignore[arg-type]
         tags=("read", "media"),

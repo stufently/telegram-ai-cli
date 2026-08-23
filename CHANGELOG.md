@@ -55,6 +55,51 @@ before that, breaking changes can happen on any `0.x` release.
   is not a person to block, and a private conversation has no title, description
   or photo of its own. Without the check the plan would be approved and then fail
   inside Telethon at apply time — the one moment nothing can be done about it.
+- **`mcp.tools` — a tool-visibility gate on the MCP surface.** An operator-set list
+  of the tool names this server may publish (`TGAI_MCP__TOOLS='["telegram_chats"]'`),
+  for one property no per-peer rule provides: *a prompt injection cannot invoke a
+  tool it never saw in the tool list.* It is a coarse second layer in front of the
+  permission matrix, never a replacement — the profile, the capability rules and the
+  hard denylist all still run underneath.
+  **Unset publishes every tool, exactly as before**: the gate is opt-in, because the
+  fail-closed reading that protects an empty `allow` elsewhere would here make a
+  fresh install publish nothing and get a list pasted in without thought. Set to an
+  empty list it publishes nothing, which *has* been thought about and reads like
+  every other empty allow list.
+  It filters the **call path as well as the list** — a tool name is a guessable
+  string, and a filter that only hides is cosmetic — refusing a hidden tool with
+  `FORBIDDEN_BY_ALLOWLIST`. It can only narrow: the configured names are intersected
+  with what the registry already publishes, so nothing here can conjure a tool, least
+  of all one that applies a plan. **An unknown name refuses to start**, naming every
+  unknown entry at once, the same fail-loud rule as a relative `paths.uploads`: a
+  silent drop would turn a typo into a tool missing for a reason nobody can see, and
+  a warning on the stderr of a stdio server is a line the client swallows.
+- **MCP roots as a ceiling on where a call may write.** When a client advertises
+  roots — the directories it sanctions — an operation that writes to this machine is
+  refused if the path *it* writes is outside every one of them, before the account is
+  opened and before anything is created, naming the path refused. It is **not
+  redirected** to a directory the client would accept: the quota is walked against the
+  configured directory and that is where the operator looks for files, so a silent
+  move would make both wrong at once. **Each operation is judged by its own
+  destination**, now declared as `Operation.local_path` and required of every
+  `local_write` by the registry's invariants: `media fetch` writes
+  `paths.downloads`, `archive sync` and `archive forget` write `paths.archive`.
+  Checking all three against one directory — the first cut of this, caught in
+  review — refuses an archive write over a download directory it never touches, and
+  lets one through on the strength of a directory it never touches either. The two
+  absences are different and both are honoured — a
+  client that never declared the capability cannot be asked and constrains nothing
+  (every client without roots keeps working), while a client that declared it and
+  answered with an empty list was asked and sanctions none. One that declared it and
+  then fails to answer is refused: it said it does roots, and a transport error is
+  not permission. Containment is decided on canonical paths — `realpath` first,
+  comparison on path components after — so a symlink out of a root, a `..` in the
+  middle, and `/srv/data-evil` against a root of `/srv/data` are all refused. A root
+  that is not a usable local directory — another scheme, another host, a relative
+  path, an embedded NUL that would otherwise raise out of `realpath` — is dropped,
+  and dropping the last one leaves the empty-list refusal rather than a traceback.
+  It is the same containment check `message send-file` applies to the outbox, now
+  shared in `telegram_ai_cli/roots.py` rather than written twice.
 
 - `tg-ai message schedule` / `telegram_plan_schedule_message` — plan a message for a
   given time, or for the moment the other person is next online. The point is not

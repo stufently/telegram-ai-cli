@@ -17,11 +17,24 @@ relies on them.
 **There is no apply tool.** Write operations expose a *plan* tool that records
 an intention; carrying it out is ``tg-ai plan apply`` in a terminal. The
 registry asserts this at import time rather than leaving it to review.
+
+Two things narrow this surface further, and both are decided once, at startup,
+from the configuration — never from anything arriving over the protocol:
+
+**The tool-visibility gate** (``mcp.tools``). Unset, every tool is published.
+Set, only the named ones are — in the list *and* on the call path, because a
+filter that only hides is cosmetic. It can only narrow: a name the registry
+does not publish is a configuration error, not a new tool.
+
+**Client roots.** An operation that writes to this machine is refused if the
+configured download directory is outside every directory the client sanctioned.
+See :mod:`telegram_ai_cli.roots`.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +43,13 @@ from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
 from mcp.server.stdio import stdio_server
 
+from .config import Settings, load_settings
 from .context import OperationContext
 from .envelope import Envelope, Meta
-from .errors import ProfileForbidden, TelegramAIError
+from .errors import InvalidInput, NotAllowlisted, ProfileForbidden, TelegramAIError
 from .opspec import REGISTRY, Effect, Operation
-from .render import sanitize
+from .render import sanitize, sanitize_line
+from .roots import require_sanctioned_path
 from .untrusted import CLOSE_MARKER, OPEN_MARKER, wrap
 
 SERVER_NAME = "telegram-ai-cli"
@@ -88,7 +103,73 @@ def _tool_for(op: Operation, *, plan: bool) -> types.Tool:
     )
 
 
+def published_tool_names(configured: Sequence[str] | None) -> frozenset[str] | None:
+    """Which tool names this server may publish, or ``None`` for "all of them".
+
+    ``None`` in, ``None`` out: the gate is off unless it is configured, and off
+    means the surface is exactly what it was before this existed.
+
+    An unknown name is a **refusal to start**, not a warning and not a silent
+    drop. The two alternatives are both worse in the same way. A silent drop
+    turns ``telegram_chatz`` into a tool that is missing for a reason nobody can
+    see, and the operator debugs the feature instead of reading the typo; a
+    warning on stderr of a stdio MCP server is a line the client swallows. This
+    project already refuses to start on a relative ``paths.uploads`` and on a
+    registry that breaks its own invariants, and this is the same class of
+    mistake: configuration that does not say what its author meant.
+
+    Every unknown entry is named at once. An operator fixing them one restart at
+    a time is an operator we made do that.
+
+    The intersection at the end is not defensive noise: it is what makes "can
+    only narrow" a property of the code rather than a claim in a comment.
+    """
+    if configured is None:
+        return None
+
+    known = frozenset(REGISTRY.mcp_tool_names())
+    wanted = frozenset(name.strip() for name in configured)
+    if unknown := sorted(wanted - known):
+        listed = ", ".join(sanitize_line(name, limit=80) for name in unknown)
+        raise InvalidInput(
+            f"mcp.tools names {len(unknown)} tool(s) this server does not publish: {listed}",
+            suggestion=(
+                "`tg-ai schema` prints every published tool name. Note that a write "
+                "operation has no direct tool — it is published as telegram_plan_*, and "
+                "there is no tool that applies a plan."
+            ),
+        )
+    return wanted & known
+
+
+def _local_destination(op: Operation, settings: Settings) -> Path:
+    """The path a ``LOCAL_WRITE`` operation writes into, from its own declaration.
+
+    Not derived from the effect: three operations share ``LOCAL_WRITE`` and two
+    of them write ``paths.archive`` rather than ``paths.downloads``, so a single
+    destination assumed for all of them is a ceiling applied to the wrong
+    directory twice over.
+    """
+    if op.local_path is None:  # pragma: no cover - Registry.check_invariants forbids it
+        raise TelegramAIError(
+            f"{op.name} writes to this machine without declaring which configured path, "
+            "so it cannot be checked against the client's roots"
+        )
+    return Path(getattr(settings.paths, op.local_path))
+
+
 def build_server(*, config_path: Path | None = None) -> Server:
+    # Imported here, as `serve` does: the registry has to be populated before
+    # the gate can tell a typo from a tool, and a server built before any
+    # operation registered would reject every name in the configuration.
+    import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
+
+    # Read once, at startup. The gate and the download directory are process
+    # facts, not per-call ones: re-reading configuration mid-session would mean
+    # a tool list a client already cached could stop matching what is callable.
+    settings = load_settings(config_path)
+    published = published_tool_names(settings.mcp.tools)
+
     # Handlers are passed to the constructor and return whole result models.
     # The 1.x decorator form (@server.list_tools) no longer exists on the
     # low-level Server, and referencing it raised AttributeError only when a
@@ -101,19 +182,58 @@ def build_server(*, config_path: Path | None = None) -> Server:
     ) -> types.ListToolsResult:
         tools = [_tool_for(op, plan=False) for op in REGISTRY.read_tools()]
         tools += [_tool_for(op, plan=True) for op in REGISTRY.plan_tools()]
+        if published is not None:
+            # Filtered from what the registry produced, never assembled from the
+            # configured names: the gate removes tools and has no way to add one.
+            tools = [tool for tool in tools if tool.name in published]
         return types.ListToolsResult(tools=tools)
 
     async def on_call_tool(
-        ctx: ServerRequestContext[Any],
+        request_ctx: ServerRequestContext[Any],
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
         name = params.name
         arguments: dict[str, Any] = dict(params.arguments or {})
         try:
             op = REGISTRY.by_mcp_tool(name)
+
+            if published is not None and name not in published:
+                # A tool kept out of the list is kept out of the call path too:
+                # the name is a string, and a caller that guesses one would
+                # otherwise reach a tool the operator removed from the surface.
+                #
+                # `name` matched the registry above, so the string quoted here
+                # is one of this project's own constants rather than
+                # caller-supplied text — which is what makes quoting it safe at
+                # all, since `Envelope.failure` neither wraps nor defangs.
+                matched = op.plan_tool if name == op.plan_tool else op.mcp_tool
+                raise NotAllowlisted(
+                    f"{matched} is not published by this server: mcp.tools does not list it",
+                    suggestion=(
+                        "Add it to mcp.tools, or unset mcp.tools to publish every tool. "
+                        "This gate only narrows — it cannot grant anything the profile "
+                        "and the chat allowlists do not already permit."
+                    ),
+                )
+
             params = op.parse(arguments or {})
 
             with OperationContext.build(actor="mcp", config_path=config_path) as ctx:
+                if op.effect is Effect.LOCAL_WRITE:
+                    # Every effect that writes to this machine, checked against
+                    # the path that operation actually writes — media.fetch
+                    # fills paths.downloads, the archive operations write
+                    # paths.archive. Keyed on the effect so a new local write
+                    # cannot skip the check, and on the operation's own
+                    # `local_path` so it is not checked against somebody else's
+                    # directory, which is what taking paths.downloads for all
+                    # three did.
+                    await require_sanctioned_path(
+                        getattr(request_ctx, "session", None),
+                        _local_destination(op, ctx.settings),
+                        what=op.name,
+                    )
+
                 if op.is_remote_write:
                     if name != op.plan_tool:
                         # Reachable only if a write ever grew a direct tool name;

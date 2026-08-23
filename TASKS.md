@@ -296,6 +296,52 @@ is
       which is most of the reason the operation exists — but it does mean a wrong
       schedule applied from a headless machine has to be undone on a phone.
 
+- [ ] **The tool gate lists names, and nothing else.** `mcp.tools` is a flat
+      allow list of exact tool names: no deny form, no patterns, no "every read
+      tool" or "everything tagged `archive`". Each of those is a small language,
+      and a small language for permissions is the thing this project has
+      repeatedly refused to grow — but the cost is real. An operator who wants
+      the twenty read tools and none of the plan tools writes twenty names, and
+      writes them again when one is renamed. The `tags` already on every
+      `Operation` are the obvious raw material if this is ever taken further,
+      and taking it further should be a decision rather than a convenience.
+
+- [ ] **Client roots do not constrain the outbox.** Roots are applied to what an
+      MCP call *writes* (`paths.downloads`, `paths.archive`) and not to
+      `paths.uploads`, where an applied plan *reads* from, so a client that sanctions one
+      directory cannot thereby stop a file being sent out of another. The reason
+      is structural rather than an oversight: a plan is applied from a terminal
+      by `tg-ai plan apply`, where there is no MCP session and no roots to ask
+      about, so the check could only run at *plan* time and would be absent at
+      the moment the bytes actually leave. A ceiling that holds in one of the two
+      places is worse than an operator knowing it holds in neither — the outbox
+      rule in `outbox.py` is the one doing that work. Revisit only if plan
+      preconditions grow a way to record "the client sanctioned this path", which
+      the applier could then re-check.
+
+- [ ] **The roots check is a check on a path, not a lock on a directory.** It
+      canonicalises `paths.downloads` (or `paths.archive`) and compares, then the
+      operation opens the account, spends a network round trip and only then
+      writes — so someone who can replace that directory with a symlink *on this
+      host* in between still redirects the write, and `O_NOFOLLOW` in
+      `ops/media.py` only covers the last path component. Closing it properly
+      means holding an open directory descriptor across the check and writing
+      through `openat`, which is a change to how every local write opens its
+      file rather than to roots. It does not widen anything roots were supposed
+      to close: an attacker with write access to the download directory's parent
+      is already inside the local-user boundary this project draws in
+      `docs/threat-model.md`. Raised by review.
+
+- [ ] **Roots are re-read on every call, and a change to them is not noticed
+      between calls.** Each `local_write` asks the client afresh (one `roots/list`
+      round trip per download, which is cheap and always current), but nothing
+      subscribes to `notifications/roots/list_changed`, and the published *tool
+      list* never changes in response to roots — a client that revokes the root
+      containing `paths.downloads` keeps seeing `telegram_media_fetch` in its tool
+      list and finds out on the call. Hiding the tool instead would mean the list
+      a client cached and the list that is callable could disagree, which is the
+      worse failure of the two.
+
 ## Known gaps in the CLI surface
 
 - [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in

@@ -831,6 +831,7 @@ ARCHIVE_SYNC = REGISTRY.register(
         ),
         input_model=ArchiveSyncInput,
         effect=Effect.LOCAL_WRITE,
+        local_path="archive",
         capability=Capability.READ_CHAT,
         handler=handle_archive_sync,  # type: ignore[arg-type]
         tags=("archive", "local"),
@@ -895,6 +896,7 @@ ARCHIVE_FORGET = REGISTRY.register(
         ),
         input_model=ArchiveForgetInput,
         effect=Effect.LOCAL_WRITE,
+        local_path="archive",
         # The one operation in the project that removes data, and the one whose
         # second run is identical to its first. Both are published to MCP
         # clients, which otherwise inherit the blanket "not destructive, not

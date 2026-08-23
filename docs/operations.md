@@ -42,6 +42,13 @@ Anything truncated says so in `meta.truncated`.
 delimited — see the next section. It is data, never instruction; the
 [threat model](threat-model.md) has the rest.
 
+**The MCP surface can be narrowed to a subset of these tools.** `mcp.tools`
+publishes only the names it lists, in the tool list *and* on the call path, so a
+tool an operator removed is one a prompt injection never sees and cannot invoke
+by name. It only ever narrows — every rule below still applies to whatever
+remains. See
+[`configuration.md`](configuration.md#mcp).
+
 ---
 
 ## The trust boundary in tool output
@@ -788,6 +795,21 @@ under the configured download root with a generated name, opened
 `download.timeout_seconds` and `download.total_quota_bytes`; only an opaque
 `artifact_id` comes back. A caller-chosen path would let this tool overwrite the
 configuration, the plan database, `~/.bashrc` or the session file itself.
+
+**An MCP client's roots are a ceiling on that directory.** If the client
+advertises roots, the fetch is refused — before the account is opened and
+before anything is created — when `paths.downloads` lies outside every one of
+them, and the refusal names the path. It is never redirected somewhere the
+client *would* sanction: the operator configured a directory, the quota is
+walked against it, and a download landing elsewhere would make every one of
+those facts wrong at once. The same ceiling applies to the other two
+`local_write` operations, each judged by the path it actually writes —
+`archive sync` and `archive forget` against `paths.archive`, which is what
+`Operation.local_path` declares. A client that does not implement roots
+constrains nothing, and one that advertises an *empty* list sanctions nothing —
+those are different answers, and
+[`configuration.md`](configuration.md#client-roots-and-where-an-mcp-call-writes)
+has the table.
 
 ---
 

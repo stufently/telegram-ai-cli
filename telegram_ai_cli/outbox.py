@@ -67,6 +67,7 @@ from .errors import (
     NotFound,
 )
 from .render import sanitize_line
+from .roots import is_within, resolved
 
 #: Read in this many bytes at a time when digesting. Large enough not to make a
 #: syscall per line, small enough not to hold a 100 MiB file in memory.
@@ -171,7 +172,7 @@ def upload_roots(settings: Settings) -> tuple[Path, ...]:
                     "started in, which is not a permission anybody granted."
                 ),
             )
-        roots.append(Path(os.path.realpath(expanded)))
+        roots.append(resolved(expanded))
     return tuple(roots)
 
 
@@ -373,8 +374,10 @@ def resolve_outbound(
         # Relative to the outbox, never to the process's working directory.
         candidate = roots[0] / candidate
 
-    real = Path(os.path.realpath(candidate))
-    root = next((r for r in roots if real == r or r in real.parents), None)
+    # One containment check, shared with the MCP roots ceiling: canonicalise,
+    # then compare on path components. See `telegram_ai_cli.roots`.
+    real = resolved(candidate)
+    root = next((r for r in roots if is_within(real, r)), None)
     if root is None:
         listed = ", ".join(sanitize_line(str(r), limit=200) for r in roots)
         raise NotAllowlisted(

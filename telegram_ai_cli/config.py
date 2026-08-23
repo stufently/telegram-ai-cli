@@ -178,6 +178,35 @@ class UploadConfig(BaseModel):
     timeout_seconds: int = Field(default=300, ge=1)
 
 
+class McpConfig(BaseModel):
+    """What the MCP surface publishes — a ceiling, never a source of tools.
+
+    ``tools`` is the only key, and its default is the important part:
+
+    **Unset means every tool, exactly as before.** This gate is opt-in. A
+    fail-closed default here would be a different kind of mistake from the one
+    the empty-``allow`` convention guards against — it would make a fresh
+    install publish nothing, and the first thing anybody did about it would be
+    to write a list they did not think about.
+
+    **Set, it can only narrow.** The names are matched against the tools the
+    registry already publishes; a name that is not one of them is a
+    configuration error rather than a new tool, so nothing here can reach past
+    the profile, the capability matrix or the hard denylist.
+
+    **Set to an empty list, it publishes nothing** — the same reading every
+    other allow list in this file gets, and the only one that does not make
+    "empty because nobody filled it in" mean "everything".
+
+    The point is narrow and worth stating: a prompt injection cannot invoke a
+    tool it never saw in the tool list. That is a coarse second layer in front
+    of the per-peer rules in :mod:`telegram_ai_cli.safety`, not a replacement
+    for them.
+    """
+
+    tools: list[str] | None = None
+
+
 class AuditConfig(BaseModel):
     enabled: bool = True
     #: Off by default: the log records that a message was sent, not its text.
@@ -229,6 +258,7 @@ class Settings(BaseSettings):
     plans: PlansConfig = Field(default_factory=PlansConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
     upload: UploadConfig = Field(default_factory=UploadConfig)
+    mcp: McpConfig = Field(default_factory=McpConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 

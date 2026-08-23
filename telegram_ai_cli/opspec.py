@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ValidationError
 
+from .config import PathsConfig
 from .errors import InvalidInput, UnknownOperation
 from .safety import Capability
 
@@ -85,6 +86,19 @@ class Operation:
 
     capability: Capability | None = None
     """Which policy this consults. ``None`` only for operations with no peer."""
+
+    local_path: str | None = None
+    """Which ``paths.*`` setting a ``LOCAL_WRITE`` writes into, e.g. ``"downloads"``.
+
+    Required for ``LOCAL_WRITE`` and forbidden for anything else, both checked
+    in :meth:`Registry.check_invariants`. It exists because "this operation
+    writes to the machine" is not enough to say **where**: ``media.fetch``
+    fills ``paths.downloads`` and the archive operations write
+    ``paths.archive``, and an MCP client's roots have to be checked against the
+    path the operation actually uses. Deriving it from the effect alone was the
+    bug that made this a field — one destination checked on behalf of three
+    operations is a check that is wrong twice.
+    """
 
     handler: Handler | None = None
     planner: Planner | None = None
@@ -214,6 +228,22 @@ class Registry:
                     f"{op.name}: exactly one of handler/planner must be set "
                     "(a read that also plans, or an operation that does neither, "
                     "is a definition error)"
+                )
+
+            if op.effect is Effect.LOCAL_WRITE:
+                if op.local_path is None:
+                    raise ValueError(
+                        f"{op.name}: a local write must name the paths.* setting it writes "
+                        "into. It is what an MCP client's advertised roots are checked "
+                        "against, and an operation that names nothing would be checked "
+                        "against some other operation's directory."
+                    )
+                if op.local_path not in PathsConfig.model_fields:
+                    raise ValueError(f"{op.name}: paths.{op.local_path} is not a configured path")
+            elif op.local_path is not None:
+                raise ValueError(
+                    f"{op.name}: only a local write may name a paths.* setting; nothing "
+                    "else writes to this machine"
                 )
 
             if op.is_remote_write:

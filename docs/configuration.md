@@ -320,6 +320,104 @@ Two requirements on the directory itself, both fail-closed:
   refused with `INSECURE_PERMISSIONS` and the `chmod` that fixes it; it is not
   re-permissioned automatically, because it is a directory a person owns.
 
+## `mcp`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `mcp.tools` | unset | Which tool names the MCP server publishes. Unset = all of them |
+
+```yaml
+mcp:
+  tools:
+    - telegram_chats
+    - telegram_chat_read
+    - telegram_search
+```
+
+`TGAI_MCP__TOOLS='["telegram_chats","telegram_chat_read"]'` — a JSON list, like
+every other list-valued setting.
+
+**A tool that is never published cannot be invoked by a prompt injection.** That
+is the whole claim, and it is worth being precise about what it does *not* say:
+this is a second, coarser layer in front of the per-peer rules, not a
+replacement for them. It narrows which of this server's tools exist as far as
+the client is concerned; the profile, the capability matrix and the hard
+denylist all still run underneath, and the gate can never reach past them.
+
+Three behaviours follow, and each is a deliberate answer to a question that has
+a defensible opposite:
+
+- **Unset means every tool**, exactly as before this setting existed. The gate
+  is opt-in. The empty-`allow`-means-nothing convention elsewhere in this file
+  protects against a list that was empty because nobody filled it in; here the
+  same default would make a fresh install publish nothing at all, and the first
+  thing anybody did about that would be to paste a list they had not thought
+  about.
+- **`mcp.tools: []` publishes nothing.** Set to an empty list, it *has* been
+  thought about, and it reads like every other empty allow list here.
+- **An unknown name refuses to start.** `tg-ai mcp` exits with
+  `error [INVALID_INPUT] mcp.tools names 1 tool(s) this server does not
+  publish: telegram_chatz`, naming every unknown entry at once. A silent drop
+  would turn a typo into a tool that is missing for a reason nobody can see, and
+  a warning on the stderr of a stdio server is a line the client swallows. It is
+  the same fail-loud rule as a relative `paths.uploads`.
+
+The gate filters the **call path** as well as the tool list. A hidden tool
+invoked by name is refused with `FORBIDDEN_BY_ALLOWLIST`; a filter that only
+hides is cosmetic, since a tool name is a guessable string.
+
+`tg-ai schema` prints every publishable name. Note that a write operation has no
+direct tool — it appears as `telegram_plan_*` — so naming `telegram_message_send`
+here is a configuration error, not a way to obtain one.
+
+### Client roots and where an MCP call writes
+
+If the MCP client advertises [roots](https://modelcontextprotocol.io/) — the
+directories it sanctions — an operation that writes to this machine is refused
+when the path *it* writes is outside every one of them, naming the path that was
+refused. Nothing is redirected: a download that lands somewhere other than where
+it was configured to land would leave the quota, the artifact ids and the
+operator's own expectations describing a different directory.
+
+**Each operation is judged by its own destination**, which it declares
+(`Operation.local_path`, checked at import for every `local_write`):
+
+| Operation | Path checked |
+| --- | --- |
+| `media fetch` | `paths.downloads` |
+| `archive sync`, `archive forget` | `paths.archive` |
+
+That distinction is not cosmetic. All three are `local_write`, and checking
+them against one directory would refuse an archive write over a download
+directory it never touches — and let one through on the strength of a directory
+it never touches either.
+
+There is no setting for this. Roots arrive over the protocol, they can only
+narrow what the configuration already permits, and the two absences mean
+different things:
+
+| The client | Means | Effect |
+| --- | --- | --- |
+| never declared the roots capability | there is nobody to ask | unconstrained; the configured paths stand |
+| declared it and answered with an empty list | it was asked, and sanctions none | every local write refused |
+| declared it and failed to answer | unknown | refused — it said it does roots, and a transport error is not permission |
+
+A root that is not a usable local directory — a non-`file://` scheme, another
+host, a relative path, an embedded NUL — is dropped rather than guessed at. If
+that leaves no roots, the result is the empty-list row above: a refusal.
+
+Containment is decided on canonical paths — `realpath` first, comparison after —
+so a symlink out of a root and a `..` in the middle of a path are both refused,
+and `/srv/data-evil` is not inside `/srv/data`. It is the same check
+`message send-file` applies to the outbox, shared rather than written twice
+([`roots.py`](../telegram_ai_cli/roots.py)).
+
+The check runs before the account is opened, and it is a check on a path, not a
+lock on a directory: someone who can already replace `paths.downloads` with a
+symlink on this host between the check and the write can still redirect it, the
+same as they could before roots existed. That is the local-user trust boundary
+the [threat model](threat-model.md) draws, not something roots move.
+
 ## `audit`
 
 | Key | Default | Meaning |
