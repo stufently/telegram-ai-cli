@@ -94,6 +94,43 @@ def sanitize_line(text: str, *, limit: int | None = None) -> str:
     return flat
 
 
+#: Largest first. How many of them are spoken is the caller's decision, and it
+#: is not cosmetic: two units read better ("in about 3 days 4 hours") but round
+#: *down*, so 25h59m becomes "1 day 1 hour". Where the number is the thing being
+#: approved — how long a chat stays muted — every non-zero unit is spoken.
+_DURATION_UNITS: tuple[tuple[int, str], ...] = (
+    (86400, "day"),
+    (3600, "hour"),
+    (60, "minute"),
+    (1, "second"),
+)
+
+
+def humanize_duration(seconds: float, *, max_units: int = 2) -> str:
+    """A span of time as a person would say it, for a plan summary.
+
+    ``28800`` is not something a reviewer can judge — "8 hours" is. This lives
+    next to the other approval-surface rendering because that is the only place
+    it is used: a duration in machine form belongs in the plan's parameters,
+    and a duration in words belongs in the sentence somebody approves.
+
+    ``max_units`` truncates rather than rounds, which is why a caller whose
+    duration *is* the decision passes ``max_units=4`` and says the whole thing.
+    """
+    remaining = int(seconds)
+    if remaining <= 0:
+        return "no time at all"
+
+    parts: list[str] = []
+    for size, name in _DURATION_UNITS:
+        count, remaining = divmod(remaining, size)
+        if count:
+            parts.append(f"{count} {name}{'s' if count != 1 else ''}")
+        if len(parts) == max_units:
+            break
+    return " ".join(parts)
+
+
 def quote_for_review(text: str, *, limit: int = 4000) -> str:
     """Render a message body for a human who is about to approve sending it.
 

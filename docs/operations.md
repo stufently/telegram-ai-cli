@@ -1113,11 +1113,17 @@ Notes that are not obvious from the table:
   without saying whose cannot be checked by the person approving it. The summary
   prints the offset form, the UTC equivalent and how far away it is. `when_online` is
   the alternative — Telegram's own "send when they are next online", one-to-one chats
-  only, and it reuses the same sentinel `telegram_scheduled` reads back. Up to a year
-  ahead, and a plan whose moment has passed by the time it is applied is **refused**
-  rather than sent late: Telegram sends a scheduled message with a past date
-  immediately. Once applied, the message waits in Telegram's own scheduled queue,
-  where it is visible in the app and can be cancelled — cancelling it from here is not
+  only, and it reuses the same sentinel `telegram_scheduled` reads back; if they are
+  online already Telegram sends it at once, so that mode can skip the queue entirely
+  and the summary and the apply warning both say so. **At least two minutes** and at
+  most a year ahead: the margin is the applier's own budget (a rate-limit reservation,
+  an audit write and up to a minute of RPC), and a schedule that arrives nearly due is
+  sent immediately by Telegram. A plan whose moment has passed by the time it is
+  applied is **refused** rather than sent late, for the same reason. What the plan
+  records is compared again on apply — the time, the body's digest, `silent` and
+  `link_preview` — so a message that changed after review cannot be sent as though it
+  had been read. Once applied, a timed message waits in Telegram's own scheduled
+  queue, visible in the app and cancellable there; cancelling it from here is not
   possible, see [`TASKS.md`](../TASKS.md).
 - **`chat.archive` and `chat.mute` change nothing anybody else can see.** They move a
   chat in this account's own list and silence notifications on this account's own

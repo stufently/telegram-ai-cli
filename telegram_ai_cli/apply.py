@@ -85,6 +85,10 @@ _LIMIT_KINDS: dict[str, LimitKind] = {
     "message.edit": LimitKind.SEND,
     "message.delete": LimitKind.SEND,
     "message.forward": LimitKind.SEND,
+    # A scheduled send is a send: it costs the same budget, at the moment the
+    # queue entry is created rather than at the moment it goes out. Charging it
+    # later is not an option — nothing of ours runs then.
+    "message.schedule": LimitKind.SEND,
     # Marking read is visible to the other party, so it draws on the same
     # budget as speaking rather than being free.
     "chat.mark_read": LimitKind.SEND,
@@ -206,6 +210,14 @@ def _no_effect_error_classes() -> tuple[type[BaseException], ...]:
         "MessageEmptyError",
         "MessageTooLongError",
         "PeerIdInvalidError",
+        # A schedule Telegram will not take. Each of these is answered before
+        # anything is queued: an unusable date, one past its horizon, a queue
+        # that is full, or a peer whose online status is hidden — which is the
+        # one thing "send when they are next online" cannot work without.
+        "ScheduleDateInvalidError",
+        "ScheduleDateTooLateError",
+        "ScheduleTooMuchError",
+        "ScheduleStatusPrivateError",
         "UsernameNotOccupiedError",
         "UsernameInvalidError",
         "InviteHashExpiredError",
@@ -399,6 +411,43 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 )
                 _check_messages([pre["reply_to"]], original)
             return prepared
+
+        case "message.schedule":
+            from .ops.schedule import recheck_schedule
+
+            require_planning_profile(ctx, Capability.SEND, action=action)
+            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+            require_peer(ctx, Capability.SEND, chat.ref, action=action)
+            warnings += _check_peer(pre["peer"], chat, what="chat")
+            # The reviewed *time*, not only the reviewed chat. Telegram sends a
+            # scheduled message whose moment has already passed immediately, so
+            # a plan applied too late would fire now rather than be late.
+            recheck_schedule(pre, params)  # type: ignore[arg-type]
+            return _Prepared(
+                limit_target=str(chat.ref.peer_id),
+                peers={"chat": chat},
+                audit_peer_id=chat.ref.peer_id,
+                audit_body=getattr(params, "text", None),
+                warnings=warnings,
+            )
+
+        case "chat.archive" | "chat.mute":
+            from .ops.quiet import recheck_archive, recheck_mute
+
+            require_planning_profile(ctx, Capability.SEND, action=action)
+            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+            require_peer(ctx, Capability.SEND, chat.ref, action=action)
+            warnings += _check_peer(pre["peer"], chat, what="chat")
+            if operation == "chat.archive":
+                recheck_archive(pre, params)  # type: ignore[arg-type]
+            else:
+                recheck_mute(pre, params)  # type: ignore[arg-type]
+            return _Prepared(
+                limit_target=str(chat.ref.peer_id),
+                peers={"chat": chat},
+                audit_peer_id=chat.ref.peer_id,
+                warnings=warnings,
+            )
 
         case "message.send_file":
             require_planning_profile(ctx, Capability.SEND, action=action)
@@ -778,6 +827,68 @@ async def _execute(
             )
             sent_list = sent if isinstance(sent, list) else [sent]
             return {"message_ids": [int(m.id) for m in sent_list if m is not None]}, warnings
+
+        case "message.schedule":
+            from .ops.schedule import schedule_date
+
+            scheduled = await client.send_message(
+                prepared.peers["chat"].ref.peer_id,
+                params.text,  # type: ignore[attr-defined]
+                # One integer, computed by the same function the planner and the
+                # preconditions used — including the sentinel that means "when
+                # they are next online" rather than a date in 2038.
+                schedule=schedule_date(params),  # type: ignore[arg-type]
+                silent=params.silent,  # type: ignore[attr-defined]
+                link_preview=params.link_preview,  # type: ignore[attr-defined]
+            )
+            # A scheduled send answers with an id from the chat's *scheduled*
+            # sequence, and older layers may answer with nothing this library
+            # can turn into a message. The queue entry exists either way, so a
+            # missing id is reported as missing rather than raised — raising
+            # here would file a successful schedule as an unknown outcome.
+            scheduled_id = getattr(scheduled, "id", None)
+            at = params.at  # type: ignore[attr-defined]
+            if params.when_online:  # type: ignore[attr-defined]
+                # The queue is what makes this operation worth having, and this
+                # is the one mode that may skip it: Telegram sends immediately
+                # to somebody who is already online, leaving nothing to cancel.
+                warnings.append(
+                    "sent in 'when online' mode: if the recipient was already online it has "
+                    "gone out now rather than waiting in the scheduled queue"
+                )
+            return {
+                "scheduled": True,
+                "message_id": int(scheduled_id) if scheduled_id is not None else None,
+                "send_when_online": bool(params.when_online),  # type: ignore[attr-defined]
+                "scheduled_for": None if at is None else at.isoformat(),
+            }, warnings
+
+        case "chat.archive":
+            from .ops.quiet import folder_id_for
+
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            folder_id = folder_id_for(params)  # type: ignore[arg-type]
+            await client(
+                functions.folders.EditPeerFoldersRequest(
+                    folder_peers=[types.InputFolderPeer(peer=peer, folder_id=folder_id)]
+                )
+            )
+            return {"archived": bool(params.archived)}, warnings  # type: ignore[attr-defined]
+
+        case "chat.mute":
+            from .ops.quiet import mute_until
+
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            # Computed here, against the clock of the moment this is applied: the
+            # plan carries a duration, not a deadline.
+            until = mute_until(params)  # type: ignore[arg-type]
+            await client(
+                functions.account.UpdateNotifySettingsRequest(
+                    peer=types.InputNotifyPeer(peer=peer),
+                    settings=types.InputPeerNotifySettings(mute_until=until),
+                )
+            )
+            return {"muted": bool(params.muted), "mute_until": until or None}, warnings  # type: ignore[attr-defined]
 
         case "chat.mark_read":
             peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)

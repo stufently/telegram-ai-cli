@@ -16,11 +16,15 @@ before that, breaking changes can happen on any `0.x` release.
   from a phone, with no agent running and no terminal open. `at` is ISO-8601 and must
   carry an explicit UTC offset; a naive time is refused rather than guessed, and the
   summary prints the offset form, the UTC equivalent and the distance from now,
-  because a line that says "09:00" without saying whose is one nobody can check. Up to
-  a year ahead; `when_online` is Telegram's own mode and needs a one-to-one chat,
-  reusing the sentinel `telegram_scheduled` already reads back rather than a second
-  copy of it. A plan whose moment has passed is **refused** at apply time rather than
-  sent late, because Telegram sends a scheduled message with a past date immediately.
+  because a line that says "09:00" without saying whose is one nobody can check. At
+  least two minutes and at most a year ahead — the floor is the applier's own budget,
+  since Telegram sends a nearly-due schedule immediately. `when_online` is Telegram's
+  own mode and needs a one-to-one chat, reusing the sentinel `telegram_scheduled`
+  already reads back rather than a second copy of it; if the recipient is online
+  already it goes out at once instead of waiting in the queue, which the summary says
+  and the apply step warns about. A plan whose moment has passed is **refused** at
+  apply time rather than sent late, and what apply compares against the plan is the
+  whole message — time, body digest, `silent`, `link_preview` — not only its clock.
 - `tg-ai chat archive` / `telegram_plan_archive_chat` and `tg-ai chat mute` /
   `telegram_plan_mute_chat` — move a chat into Archived or back out of it, and mute it
   for a while, indefinitely, or not at all. These are the two writes nobody else can
