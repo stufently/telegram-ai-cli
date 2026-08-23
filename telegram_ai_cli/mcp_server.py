@@ -27,6 +27,7 @@ from typing import Any
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
+from mcp.server.lowlevel.server import ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .context import OperationContext
@@ -75,16 +76,26 @@ def _tool_for(op: Operation, *, plan: bool) -> types.Tool:
 
 
 def build_server(*, config_path: Path | None = None) -> Server:
-    server: Server = Server(SERVER_NAME, instructions=INSTRUCTIONS)
-
-    @server.list_tools()
-    async def list_tools() -> list[types.Tool]:
+    # Handlers are passed to the constructor and return whole result models.
+    # The 1.x decorator form (@server.list_tools) no longer exists on the
+    # low-level Server, and referencing it raised AttributeError only when a
+    # server was actually built -- which no unit test did. scripts/smoke_mcp.py
+    # is what catches this, and it is why that check speaks the real protocol
+    # instead of importing the module.
+    async def on_list_tools(
+        ctx: ServerRequestContext[Any],
+        params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
         tools = [_tool_for(op, plan=False) for op in REGISTRY.read_tools()]
         tools += [_tool_for(op, plan=True) for op in REGISTRY.plan_tools()]
-        return tools
+        return types.ListToolsResult(tools=tools)
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.ContentBlock]:
+    async def on_call_tool(
+        ctx: ServerRequestContext[Any],
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        name = params.name
+        arguments: dict[str, Any] = dict(params.arguments or {})
         try:
             op = REGISTRY.by_mcp_tool(name)
             params = op.parse(arguments or {})
@@ -116,14 +127,25 @@ def build_server(*, config_path: Path | None = None) -> Server:
             # failure would strip the code and the suggestion.
             envelope = Envelope.failure(exc)
 
-        return [
-            types.TextContent(
-                type="text",
-                text=json.dumps(envelope.to_dict(), ensure_ascii=False, default=str),
-            )
-        ]
+        return types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=json.dumps(envelope.to_dict(), ensure_ascii=False, default=str),
+                )
+            ],
+            # Flagged as a failed tool call, but the envelope still travels as
+            # content: the caller gets the code and the suggestion, which a
+            # protocol-level error would strip.
+            is_error=not envelope.ok,
+        )
 
-    return server
+    return Server(
+        SERVER_NAME,
+        instructions=INSTRUCTIONS,
+        on_list_tools=on_list_tools,
+        on_call_tool=on_call_tool,
+    )
 
 
 async def serve(*, config_path: Path | None = None) -> None:

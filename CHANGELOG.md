@@ -98,6 +98,22 @@ before that, breaking changes can happen on any `0.x` release.
   `TASKS.md`, `docs/threat-model.md`, `llms.txt`, `CITATION.cff`,
   `docs/seo-geo-checklist.md` and `.env.example`.
 
+### Fixed
+
+- The MCP adapter is built against the installed SDK's constructor-handler API
+  (`Server(..., on_list_tools=..., on_call_tool=...)`) rather than the 1.x
+  decorator form, which the low-level `Server` no longer provides. Nothing
+  imported wrongly, so the whole suite passed while any attempt to actually
+  serve MCP died with `AttributeError`; `tests/test_mcp_server.py` now builds a
+  server and exercises both handlers, so an SDK API change fails in the unit
+  suite rather than only in the stdio smoke test.
+- The runtime image builds the real package in a directory the dependency-only
+  placeholder never touched. Sharing one left setuptools' `build/lib/` holding
+  an empty `__init__.py` stamped at build time, and `build_py` copies a source
+  file only when it is newer than its destination — so the real `__init__.py`
+  lost that comparison and never entered the wheel. The image built and ran as
+  non-root, then failed on first import with a missing `__version__`.
+
 ### Security
 
 - `777000` (Telegram Service Notifications, where login codes and 2FA resets

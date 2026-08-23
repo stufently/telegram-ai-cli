@@ -23,11 +23,12 @@ ENV PIP_NO_CACHE_DIR=1 \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-WORKDIR /build
-
+# The dependency-only install happens in its own directory, deliberately.
+#
 # Copy only the metadata needed to resolve dependencies first — this layer is
 # cached across rebuilds as long as pyproject.toml/constraints.txt are unchanged,
 # so `docker build` on a pure source-code change skips the network entirely.
+WORKDIR /deps
 COPY pyproject.toml constraints.txt ./
 # setuptools needs *something* under the package dir to validate the build
 # metadata at this stage; a minimal placeholder keeps the dependency-only
@@ -35,12 +36,24 @@ COPY pyproject.toml constraints.txt ./
 RUN mkdir -p telegram_ai_cli && touch telegram_ai_cli/__init__.py
 
 # `pip install .` (rather than `pip install -e .`) here only resolves and
-# installs the dependency graph pinned by constraints.txt; the placeholder
-# package itself is reinstalled for real once the actual source is copied below.
+# installs the dependency graph pinned by constraints.txt; the real package is
+# installed over it from /build below.
 RUN pip install -c constraints.txt .
 
+# Build the real package somewhere the placeholder never touched. Sharing one
+# directory silently shipped a BROKEN image: the placeholder install leaves
+# setuptools' build/lib/telegram_ai_cli/__init__.py behind as an empty file
+# stamped at build time, and build_py copies a source file only when it is
+# newer than its destination. The real __init__.py keeps its original mtime,
+# loses that comparison, and never makes it into the wheel — while every other
+# module, having no stale counterpart, copies fine. The image then builds, runs
+# as non-root, and fails on the first import with a missing __version__.
+# --force-reinstall because the static version means pip would otherwise call
+# the already-installed placeholder "already satisfied" and skip this entirely.
+WORKDIR /build
+COPY pyproject.toml constraints.txt ./
 COPY telegram_ai_cli/ ./telegram_ai_cli/
-RUN pip install -c constraints.txt --no-deps .
+RUN pip install -c constraints.txt --no-deps --force-reinstall .
 
 # --- runtime -----------------------------------------------------------------
 FROM python:3.14-slim AS runtime
