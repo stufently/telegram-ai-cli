@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -358,7 +359,12 @@ def test_upload_roots_refuses_a_relative_root_it_is_handed(
 
 
 def test_an_outbox_other_users_can_write_into_is_refused(outbox: Path, downloads: Path) -> None:
-    """The rule assumes the files here were put there by the operator."""
+    """The rule assumes the files here were put there by the operator.
+
+    World-writable is refused rather than repaired: no default umask produces
+    it, so it is somebody's deliberate `chmod` and silently overruling that is
+    not this tool's call.
+    """
     write(outbox / "report.pdf")
     outbox.chmod(0o777)
     try:
@@ -366,8 +372,76 @@ def test_an_outbox_other_users_can_write_into_is_refused(outbox: Path, downloads
             resolve_outbound(settings_for(outbox, downloads), "report.pdf")
         assert refusal.value.code is ErrorCode.INSECURE_PERMISSIONS
         assert "chmod" in (refusal.value.suggestion or "")
+        # Refused, not quietly re-permissioned.
+        assert stat.S_IMODE(outbox.stat().st_mode) == 0o777
     finally:
         outbox.chmod(0o755)
+
+
+def test_an_outbox_made_under_the_default_umask_is_usable(outbox: Path, downloads: Path) -> None:
+    """`umask 002` makes 0775 directories, and it is the common Linux default.
+
+    Wherever user private groups are in use — Ubuntu out of the box, Debian and
+    the RHEL family through `USERGROUPS_ENAB` — refusing those would mean the
+    tool does not work at all, on a group that has exactly one member. The group
+    write bit is taken off instead of being judged — see `_require_private_root`
+    for why "is this group safe?" cannot be answered honestly from a process.
+    """
+    write(outbox / "report.pdf")
+    outbox.chmod(0o775)
+
+    resolved = resolve_outbound(settings_for(outbox, downloads), "report.pdf")
+
+    assert resolved.name == "report.pdf"
+    # Repaired, and only the write bit: the owner's own r/x and the group's
+    # read access are left exactly as they were found.
+    assert stat.S_IMODE(outbox.stat().st_mode) == 0o755
+
+
+def test_a_group_writable_outbox_that_cannot_be_repaired_is_refused(
+    outbox: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Narrow, *or refuse* — a failed chmod must never fall through to a send.
+
+    Standing in for an outbox this process does not own: `chmod` is the owner's
+    privilege, so there the repair is an `EPERM` and the original refusal is
+    still the right answer.
+    """
+    write(outbox / "report.pdf")
+    outbox.chmod(0o775)
+
+    def refuse_to_chmod(self: Path, mode: int) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(Path, "chmod", refuse_to_chmod)
+
+    with pytest.raises(InsecurePermissions) as refusal:
+        resolve_outbound(settings_for(outbox, downloads), "report.pdf")
+    assert refusal.value.code is ErrorCode.INSECURE_PERMISSIONS
+    assert "chmod" in (refusal.value.suggestion or "")
+
+
+def test_a_chmod_that_silently_does_nothing_is_still_a_refusal(
+    outbox: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mode is read back, not inferred from `chmod` returning.
+
+    Filesystems mounted with fixed permissions — many FUSE and SMB mounts, and
+    anything with `mode=`/`dmask=` — accept the call and change nothing. Trusting
+    the return value would make this check strict-looking and open, which is the
+    worst of both. Raised by review, 2026-08-23.
+    """
+    write(outbox / "report.pdf")
+    outbox.chmod(0o775)
+
+    def chmod_that_does_nothing(self: Path, mode: int) -> None:
+        return None
+
+    monkeypatch.setattr(Path, "chmod", chmod_that_does_nothing)
+
+    with pytest.raises(InsecurePermissions, match="still writable"):
+        resolve_outbound(settings_for(outbox, downloads), "report.pdf")
+    assert stat.S_IMODE(outbox.stat().st_mode) == 0o775
 
 
 # --- what is opened, and how ------------------------------------------------

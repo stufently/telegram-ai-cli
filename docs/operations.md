@@ -1242,14 +1242,24 @@ download rule:
   `O_NOFOLLOW` and `O_NONBLOCK`, and its type and size come from `fstat` on that
   descriptor — a name checked with `stat()` and opened afterwards can be a FIFO
   by the time it is opened, which blocks for ever before any timeout is armed.
-- **The outbox must not be writable by other users.** The whole rule assumes the
+- **Only the outbox's owner may write into it.** The whole rule assumes the
   files in it were put there by whoever configured this tool; a `0777` directory
-  makes it "whatever anybody on the machine dropped in". A group- or
-  world-writable outbox is refused with `INSECURE_PERMISSIONS` and the `chmod`
-  that fixes it — not re-permissioned automatically, since it is a directory a
-  person owns. `paths.uploads` must also be an *absolute* path: `Path("")` is
-  `Path(".")`, so a blank one would silently make the process's working
-  directory the allowlist.
+  makes it "whatever anybody on the machine dropped in". A **world**-writable
+  outbox is refused with `INSECURE_PERMISSIONS` and the `chmod` that fixes it —
+  no default umask produces one, so it is a deliberate setting and not this
+  tool's to overrule. A merely **group**-writable one has the group write bit
+  removed and is then used: `umask 002` is the default wherever *user private
+  groups* are in use — Ubuntu out of the box, Debian and the RHEL family through
+  `USERGROUPS_ENAB` — and makes every directory you create `0775`, over a group
+  with one member, and refusing that left the outbox unusable out of the box for
+  most Linux users. The bit is removed rather than judged because "is anybody else in this
+  group?" cannot be answered honestly from a process — `gr_mem` lists only
+  *supplementary* members — and a check that cannot tell safe from unsafe must
+  not claim it can. A `chmod` that fails (an outbox this user does not own) is
+  fatal, exactly as it is for the download root and the archive.
+  `paths.uploads` must also be an *absolute* path: `Path("")` is `Path(".")`,
+  so a blank one would silently make the process's working directory the
+  allowlist.
 
 What this does **not** claim: someone who can already write inside the outbox can
 swap the file between the check and the upload. That is not the hole the rule

@@ -37,7 +37,12 @@ before a separate ``open()`` can be a FIFO by the time it is opened — which
 would block for ever, before any timeout is armed.
 
 The outbox must not be writable by other users, because the entire rule rests
-on the files in it having been put there by whoever configured this.
+on the files in it having been put there by whoever configured this. A
+world-writable outbox is refused; a merely *group*-writable one — which is what
+``umask 002`` leaves on a directory you just made, and ``umask 002`` is the
+default wherever user private groups are in use — has the group write bit taken
+off and is then used. See :func:`_require_private_root` for why the bit is
+removed rather than judged.
 
 What this does *not* claim: someone who can already write inside the outbox can
 swap the file between the digest and the upload. That is not the hole being
@@ -177,23 +182,89 @@ def upload_roots(settings: Settings) -> tuple[Path, ...]:
 
 
 def _require_private_root(root: Path) -> None:
-    """Refuse an outbox other users can write into.
+    """Leave the outbox writable by its owner alone, or refuse to send from it.
 
     The whole rule rests on one assumption: what is in this directory was put
-    there by whoever configured the tool. A group- or world-writable outbox
-    breaks it — anybody on the machine could drop a file in and let the next
-    approved plan carry it out — and it also widens the window between the
-    digest and the upload from "someone with write access" to "anybody".
+    there by whoever configured the tool. A second writer breaks it — anybody
+    who has one could drop a file in and let the next approved plan carry it
+    out — and it also widens the window between the digest and the upload from
+    "someone with write access" to "anybody".
 
-    Not fixed automatically: this is a directory a person owns and keeps files
-    in, and quietly re-permissioning it is a bigger liberty than refusing.
+    The two write bits are *not* the same problem, and treating them as one was
+    a bug rather than strictness:
+
+    ``o+w`` is **refused**. No default umask produces it — you have to go all
+    the way to ``umask 000`` — so an other-writable outbox is a deliberate
+    ``chmod`` somebody made, and quietly overruling a decision is a bigger
+    liberty than refusing to act on it.
+
+    ``g+w`` is **repaired** (``chmod g-w``), or refused if that fails. It is
+    exactly what ``umask 002`` leaves on a directory its owner just created, and
+    ``umask 002`` is the default wherever *user private groups* are in use —
+    Ubuntu out of the box, and Debian and the RHEL family through
+    ``USERGROUPS_ENAB`` / ``pam_umask`` — which is to say on most desktop and
+    server Linux, where every user gets a single-member group of their own.
+    Refusing it meant the outbox was unusable out of the box for those users,
+    over a "group" that was not a second writer at all.
+
+    Judging the group instead — "is anybody else in it?" — is the answer that
+    looks right and cannot be delivered honestly. ``grp.getgrgid().gr_mem``
+    lists only *supplementary* members, so a group with several accounts using
+    it as their primary gid reads back as empty; finding those means walking
+    ``pwd.getpwall()``, which is slow and incomplete the moment users come from
+    LDAP or SSSD. A check that cannot tell safe from unsafe must not claim it
+    can. Removing the bit makes the invariant true by construction instead of
+    by assumption, and costs the owner nothing they cannot put back.
+
+    Narrow-or-refuse is also how the download root
+    (:func:`telegram_ai_cli.ops.media._create_artifact`) and the archive
+    (:func:`telegram_ai_cli.archive._narrow`) already treat their directories;
+    this brings the outbox in line with them. A failed ``chmod`` is fatal here
+    for the same reason it is there: continuing would leave the directory open
+    to another account and the send looking successful. And the mode is read
+    back afterwards rather than inferred from the call returning, because a
+    ``chmod`` that silently does nothing is exactly how a check like this ends
+    up strict-looking and open.
     """
+    shown = sanitize_line(str(root), limit=200)
     mode = root.stat().st_mode
-    if mode & 0o022:
+    if mode & stat.S_IWOTH:
         raise InsecurePermissions(
-            f"{sanitize_line(str(root), limit=200)} is writable by other users "
-            f"(mode {stat.filemode(mode)})",
-            suggestion=f"chmod go-w {root} — a file this tool sends must be one you put there.",
+            f"{shown} is writable by everyone on this machine (mode {stat.filemode(mode)})",
+            suggestion=f"chmod o-w {root} — a file this tool sends must be one you put there.",
+        )
+    if not mode & stat.S_IWGRP:
+        return
+
+    try:
+        root.chmod(stat.S_IMODE(mode) & ~stat.S_IWGRP)
+    except OSError as exc:
+        raise InsecurePermissions(
+            f"{shown} is writable by its group (mode {stat.filemode(mode)}) "
+            f"and cannot be narrowed: {exc}",
+            suggestion=(
+                f"chmod g-w {root} — a file this tool sends must be one you put there. "
+                "Only the directory's owner may change its mode, so point paths.uploads "
+                "at a directory this user owns."
+            ),
+        ) from None
+
+    # A `chmod` that returns without raising has not necessarily done anything:
+    # on a mount whose modes are fixed by the mount options (many FUSE and SMB
+    # filesystems, `mode=`/`dmask=`) the call succeeds and the bit stays. Taking
+    # the return value as proof would be the worst version of this function —
+    # strict-looking, and open. Read the mode back and judge that instead
+    # (raised by review, 2026-08-23).
+    narrowed = root.stat().st_mode
+    if narrowed & (stat.S_IWGRP | stat.S_IWOTH):
+        raise InsecurePermissions(
+            f"{shown} is still writable by other users after chmod "
+            f"(mode {stat.filemode(narrowed)})",
+            suggestion=(
+                f"chmod g-w {root} — a file this tool sends must be one you put there. "
+                "A filesystem that fixes its own permissions (many network and FUSE "
+                "mounts do) cannot hold an outbox; point paths.uploads at local storage."
+            ),
         )
 
 

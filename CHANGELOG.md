@@ -100,7 +100,6 @@ before that, breaking changes can happen on any `0.x` release.
   and dropping the last one leaves the empty-list refusal rather than a traceback.
   It is the same containment check `message send-file` applies to the outbox, now
   shared in `telegram_ai_cli/roots.py` rather than written twice.
-
 - `tg-ai message schedule` / `telegram_plan_schedule_message` — plan a message for a
   given time, or for the moment the other person is next online. The point is not
   that it goes out later: once the plan is applied the message sits in **Telegram's
@@ -389,9 +388,10 @@ before that, breaking changes can happen on any `0.x` release.
   instruction Telethon always obeys.
   **The outbox is trusted, so it has to be trustworthy.** `paths.uploads` must
   be an absolute path — `Path("")` is `Path(".")`, and a blank one would quietly
-  make the process's working directory the allowlist — and a group- or
-  world-writable outbox is refused rather than silently accepted, since the rule
-  rests on the files in it having been put there by the operator. The file is
+  make the process's working directory the allowlist — and only its owner may
+  write into it, since the rule rests on the files in it having been put there
+  by the operator: a world-writable outbox is refused, and a group-writable one
+  has the group write bit removed first (see **Fixed**, below). The file is
   opened once with `O_NOFOLLOW | O_NONBLOCK` and its type, size and digest all
   come from that descriptor: a name checked with `stat()` and opened afterwards
   can be a FIFO by the time it is opened, which blocks for ever before any
@@ -760,6 +760,31 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **The outbox worked only for people whose umask was `022`.**
+  `_require_private_root` refused any `paths.uploads` with a group *or* other
+  write bit — and `umask 002`, which is the **default** wherever *user private
+  groups* are in use (Ubuntu out of the box, Debian and the RHEL family through
+  `USERGROUPS_ENAB`, each user getting a single-member group), makes every
+  directory you create `0775`. So `message send-file` failed with `INSECURE_PERMISSIONS`
+  on a directory the user had just made for it, over a "group" that had nobody
+  else in it. CI never saw this because GitHub runners use `umask 022`; the
+  local suite showed it as 43 failures in `tests/test_outbox.py` and
+  `tests/test_send_file.py` that appeared only on a developer's own machine.
+  The two write bits are now treated as the different problems they are:
+  world-writable is still **refused** (no default umask produces it, so it is a
+  deliberate `chmod` and not this tool's to overrule), while group-writable is
+  **repaired** with `chmod g-w` and then used — narrow-or-refuse, exactly as the
+  download root and the archive already handle their directories, with a failed
+  `chmod` still fatal. Only the write bit moves; read and execute are left as
+  found. Judging the group instead ("is anybody else in it?") was rejected as
+  unanswerable: `grp.getgrgid().gr_mem` lists only *supplementary* members, so a
+  group whose members all hold it as their primary gid reads back empty, and a
+  check that cannot tell safe from unsafe must not claim it can.
+  The mode is **read back** after the `chmod` rather than inferred from the call
+  returning: on a mount whose permissions are fixed by its mount options — many
+  FUSE and SMB mounts, anything with `mode=` or `dmask=` — `chmod` succeeds and
+  changes nothing, and taking success as proof would have made this the worst
+  version of the check, strict-looking and open (raised by review).
 - A promotion that granted `manage_topics` now actually grants it. The right was
   accepted by `AdminRights`, printed in the plan summary and then dropped when
   the applier built `ChatAdminRights` — so the plan a person approved and the

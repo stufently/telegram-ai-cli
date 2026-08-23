@@ -314,11 +314,28 @@ Two requirements on the directory itself, both fail-closed:
   allowlist deciding which files may leave; a relative value resolves against
   whatever directory this process was started in, and `Path("")` is `Path(".")`.
   A relative one is rejected when the settings are built.
-- **It must not be writable by group or others.** Nothing here creates the
-  outbox for you, and a `0777` one would mean "whatever anybody on this machine
-  dropped in" rather than "what the operator put there". Sending from one is
-  refused with `INSECURE_PERMISSIONS` and the `chmod` that fixes it; it is not
-  re-permissioned automatically, because it is a directory a person owns.
+- **Only its owner may write into it.** Nothing here creates the outbox for
+  you, and a `0777` one would mean "whatever anybody on this machine dropped
+  in" rather than "what the operator put there". The two write bits are handled
+  differently, on purpose:
+  - **World-writable (`o+w`) is refused** with `INSECURE_PERMISSIONS` and the
+    `chmod` that fixes it. No default umask produces it, so it is a deliberate
+    setting and this tool does not overrule those.
+  - **Group-writable (`g+w`) is repaired**: the group write bit is removed and
+    the send goes ahead. `umask 002` — the default wherever *user private
+    groups* are in use, which is Ubuntu out of the box and Debian and the RHEL
+    family through `USERGROUPS_ENAB`, and which gives each user a single-member
+    group — makes every directory you create `0775`, so refusing that made the
+    outbox unusable out of the box for most Linux users over a "group" with
+    nobody else in it. Asking whether the
+    group is safe cannot be answered honestly from a process (`gr_mem` lists
+    only supplementary members, so a group whose members all have it as their
+    *primary* gid reads back empty), so the bit is removed rather than judged.
+    Only the write bit changes; group and other read/execute are left alone. If
+    the `chmod` fails — an outbox this user does not own — the refusal stands.
+
+  If you deliberately share an outbox with a group, this tool is not the way to
+  do it: point `paths.uploads` at a directory this user owns and copy files in.
 
 ## `mcp`
 
