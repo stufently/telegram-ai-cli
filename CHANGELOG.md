@@ -100,6 +100,56 @@ before that, breaking changes can happen on any `0.x` release.
   and dropping the last one leaves the empty-list refusal rather than a traceback.
   It is the same containment check `message send-file` applies to the outbox, now
   shared in `telegram_ai_cli/roots.py` rather than written twice.
+- **A release pipeline: a `v*` tag publishes to PyPI, with no token stored
+  anywhere.** `.github/workflows/release.yml` runs the full CI matrix, builds
+  an sdist and a wheel, uploads them over **Trusted Publishing** (OIDC) and
+  drafts a GitHub release carrying the same artifacts and their SHA-256 sums.
+  Nothing else can trigger it; an ordinary push to `main` publishes nothing.
+  **No PyPI API token exists.** GitHub mints a short-lived token identifying
+  this workflow file, in this repository, in the `pypi` environment, and PyPI
+  exchanges it for a one-off upload credential — so there is no secret to leak
+  or rotate, and the job fails closed until the pending publisher is registered
+  on PyPI's side. The workflow file name and the environment name are part of
+  that trust relationship rather than cosmetic, and both are commented as such.
+  **The tag is the version, and the workflow refuses to build if it is not.**
+  setuptools reads the version from `pyproject.toml` and PyPI reads it from the
+  package metadata; neither consults the tag. So a `v0.2.0` tag on a tree that
+  says `0.1.0` would publish `0.1.0` under a release everybody reads as
+  `0.2.0` — permanently, because a version on PyPI can never be replaced or
+  re-uploaded. It is compared before a single artifact is built.
+  **The archives are checked against the working tree, not spot-checked.**
+  Every `.py` file under `telegram_ai_cli/` must be present *and non-empty* in
+  both the wheel and the sdist. This repository has shipped an empty package
+  twice over — once from an unanchored `accounts/` in `.gitignore`, once from a
+  shared build directory — and both times it built, installed and looked
+  entirely successful. `twine check --strict` then validates the metadata PyPI
+  is about to read, so a bad long-description type is a refusal here rather
+  than a rejection after the version number is spent.
+  **The CI matrix is called, not copied.** `ci.yml` gained a `workflow_call`
+  trigger and the release job `uses:` it, so a tag runs the same lint, the same
+  three Python versions, the same MCP stdio smoke test and the same container
+  check that a pull request does. A second copy of those steps would drift, and
+  the copy that drifts is the one nobody looks at until a release publishes
+  what the tests it did not run would have caught.
+  `build`, `twine` and `wheel` are pinned in `constraints.txt` like everything
+  else: the one run that produces an artifact which can never be replaced is the
+  worst place for "whatever pip resolved today". The build step exports
+  `PIP_CONSTRAINT` as well as passing `--constraint`, because `python -m build`
+  resolves `[build-system] requires` inside a *fresh isolated environment* where
+  nothing the outer `pip install` did is visible — without it the pinned
+  setuptools applied to the wrong environment and the actual build used whatever
+  PyPI served that minute (raised by review). Archive names are parsed with
+  `packaging.utils` rather than string-matched, since a back end writes the PEP
+  440 *normalized* version into a file name and `1.0-rc1` becomes `1.0rc1` —
+  a raw comparison would have rejected a perfectly good release (also review).
+  README gains a **Releasing** section with the three things the repository
+  owner has to do by hand.
+- `telegram_ai_cli/py.typed`. `Typing :: Typed` has been in the classifiers all
+  along; without the PEP 561 marker beside the package, mypy and pyright ignore
+  every annotation in it and the classifier is simply untrue. The release
+  workflow checks the marker is in the wheel, because it is a zero-byte file
+  that nothing else would notice the absence of.
+
 - `tg-ai message schedule` / `telegram_plan_schedule_message` — plan a message for a
   given time, or for the moment the other person is next online. The point is not
   that it goes out later: once the plan is applied the message sits in **Telegram's
@@ -760,6 +810,19 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **One pinned action SHA was not a commit.** `release.yml` pinned
+  `softprops/action-gh-release` to `fe965f7a…`, labelled `v3.0.2` and listed as
+  verified. That object does exist — it is the **annotated tag object** for
+  v3.0.2 — but `uses: owner/repo@<sha>` resolves commits, not tag objects, so
+  every run would have died on "unable to resolve action". The commit v3.0.2
+  points *at* is `3d0d9888cb7fd7b750713d6e236d1fcb99157228`. Every pin in both
+  workflows was re-resolved through the GitHub API — `git/ref/tags/<tag>`, then
+  `git/tags/<sha>` where the ref yields a tag object rather than a commit — and
+  the other five were correct. Two lessons, both in the convention rather than
+  the file: a `# vX.Y.Z` comment beside a SHA is a claim nothing checks, so it
+  has to come out of the API rather than off a keyboard; and reading that API
+  means dereferencing the tag, since the first answer for an annotated tag is
+  the wrong kind of object and looks entirely plausible.
 - **The outbox worked only for people whose umask was `022`.**
   `_require_private_root` refused any `paths.uploads` with a group *or* other
   write bit — and `umask 002`, which is the **default** wherever *user private

@@ -77,6 +77,7 @@ test = [
 [project.urls]
 Homepage = "https://github.com/stufently/telegram-ai-cli"
 Repository = "https://github.com/stufently/telegram-ai-cli"
+Documentation = "https://github.com/stufently/telegram-ai-cli/blob/main/docs/operations.md"
 Issues = "https://github.com/stufently/telegram-ai-cli/issues"
 Changelog = "https://github.com/stufently/telegram-ai-cli/blob/main/CHANGELOG.md"
 Security = "https://github.com/stufently/telegram-ai-cli/blob/main/SECURITY.md"
@@ -86,6 +87,14 @@ tg-ai = "telegram_ai_cli.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["telegram_ai_cli*"]
+
+# `Typing :: Typed` above is a promise to a downstream type checker, and PEP 561
+# says the promise is kept by a `py.typed` marker inside the installed package —
+# without it mypy and pyright ignore every annotation here and the classifier is
+# simply untrue. Listed explicitly rather than left to `include-package-data`,
+# which reads a MANIFEST this project does not have.
+[tool.setuptools.package-data]
+telegram_ai_cli = ["py.typed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

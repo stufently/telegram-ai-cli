@@ -106,7 +106,7 @@ Importing a `tdata` folder from Telegram Desktop is one way to authorize an acco
 
 ## Install
 
-Not published to a package registry yet — publication to PyPI (and to an MCP registry) is deferred to a separate decision, since a name there is claimed permanently. Install from source, or build the Docker image.
+Not on PyPI yet. The release pipeline is in place ([Releasing](#releasing)) and publishes from a `v*` tag over Trusted Publishing, but it cannot run until the one-time registration on PyPI's side is done — and claiming a name on a public registry is permanent, so that step is the owner's to take deliberately. Install from source, or build the Docker image.
 
 ```bash
 git clone https://github.com/stufently/telegram-ai-cli.git
@@ -357,6 +357,38 @@ A sender can't close that wrapper: `⟦` and `⟧` are replaced with `[` and `]`
 - [Design spec](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
+
+## Releasing
+
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml): the full CI matrix, then a build, then an upload to PyPI, then a **draft** GitHub release carrying the same artifacts and their SHA-256 sums. Nothing else triggers it — an ordinary push to `main` cannot publish anything.
+
+There is **no PyPI API token anywhere**, and there is not meant to be one. The upload authenticates with [Trusted Publishing](https://docs.pypi.org/trusted-publishers/): GitHub mints a short-lived OIDC token that identifies this workflow file in this repository in this environment, and PyPI exchanges it for a one-off upload credential. Nothing to leak, nothing to rotate, nothing to store.
+
+That trust is registered against five exact values, and **renaming any of them silently breaks it**:
+
+| | |
+| --- | --- |
+| PyPI project name | `telegram-ai-cli` |
+| Owner | `stufently` |
+| Repository | `telegram-ai-cli` |
+| Workflow file | `release.yml` |
+| Environment | `pypi` |
+
+Before the first release, the repository owner does three things by hand — none of them is something a commit can do:
+
+1. **Register the pending publisher on PyPI.** [pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/) → *Add a new pending publisher*, with the five values in the table above. "Pending" is the form used for a project that does not exist yet: the first successful upload creates it.
+2. **Create the `pypi` environment on GitHub.** Settings → Environments → *New environment*, named exactly `pypi`. Worth adding a required reviewer on it: the environment gate is what turns "somebody pushed a tag" into "somebody approved a publish", and it is the last point at which a release can be stopped.
+3. **Push the tag.** The version is taken from `pyproject.toml`, and the workflow **refuses to build** unless the tag says the same thing — a tag and a `version` that disagree would put one number on PyPI under a release everybody reads as another, permanently.
+
+```bash
+# after bumping `version` in pyproject.toml and landing it on main
+git tag -a v0.1.0 -m 'v0.1.0'
+git push origin v0.1.0
+```
+
+Then review the draft release GitHub created and publish it.
+
+What the pipeline checks before it uploads, because a version on PyPI can never be replaced or re-uploaded: the tag matches `pyproject.toml`; the built file names carry that version; **every** `.py` file in `telegram_ai_cli/` is present and non-empty in both the wheel and the sdist (an unanchored `.gitignore` pattern has shipped an empty package from this repo before); `py.typed` is in the wheel, since `Typing :: Typed` is a lie without it; and `twine check --strict` accepts the metadata PyPI is about to read.
 
 ## FAQ
 

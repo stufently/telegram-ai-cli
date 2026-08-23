@@ -69,9 +69,10 @@ some crawlers, in AI-generated summaries of the link. Upload one at
 
 ## PyPI metadata (when publication happens)
 
-Publication to PyPI is explicitly deferred (design §12.5) — a name on a public
-registry is claimed permanently, and that's a separate decision from writing
-the docs. When it does happen:
+The pipeline is in place — a `v*` tag publishes over Trusted Publishing (see
+the README's Releasing section) — but nothing is claimed on PyPI until the
+repository owner registers the pending publisher, because a name on a public
+registry is claimed permanently. When that happens:
 
 - [ ] Confirm `keywords`, `description` and `[project.urls]` in
       `pyproject.toml` are still accurate (they already carry the same terms

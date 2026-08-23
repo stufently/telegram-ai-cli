@@ -68,6 +68,15 @@ short, the CLI and the MCP server are both thin adapters over the same
 operation registry, and a change to one surface without checking the other is
 the most common way to break parity between them.
 
+## Releasing
+
+Maintainers only, and it is a tag rather than a button: bump `version` in
+`pyproject.toml`, land it on `main`, then push a `v<version>` tag. The workflow
+refuses to build if the two disagree. The whole procedure, and the one-time
+PyPI setup it depends on, is in the README's
+[Releasing](README.md#releasing) section — kept there rather than repeated here,
+so there is one copy of it to go stale.
+
 ## License
 
 By contributing, you agree that your contribution is licensed under the MIT

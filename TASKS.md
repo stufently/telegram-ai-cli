@@ -368,10 +368,23 @@ is
       written before that — so the number is stored as though a login had
       verified it.
 
+- [ ] **A release that uploads to PyPI and then fails to draft cannot be
+      recovered by re-running the whole workflow.** `github-release` needs
+      `publish-pypi`, and `publish-pypi` sets `skip-existing: false` on purpose —
+      so a full re-run stops at the duplicate upload and the draft is never
+      created. "Re-run failed jobs" does the right thing (the publish succeeded,
+      so only the draft job re-runs), which is why this is a rough edge rather
+      than a hole; the sharp fix is a recovery path that compares the PyPI
+      digests before deciding a re-upload is a duplicate, and that is a real
+      design question rather than a flag. Raised by review, 2026-08-23.
+
 ## Decisions
 
-- [ ] Decide on PyPI and MCP-registry publication (explicitly deferred by the
-      owner in the design, §12.5 — a name claimed there is claimed forever).
+- [ ] Decide on **MCP-registry** publication (explicitly deferred by the owner
+      in the design, §12.5 — a name claimed there is claimed forever). The PyPI
+      half of that decision is taken: the pipeline exists and publishes from a
+      `v*` tag, and what remains is the owner's manual setup, listed under "For
+      the owner, on GitHub" below.
 - [ ] Decide what to do about `telegram_plan_status(plan_id)` and
       `telegram_plan_list()`. The design (§5) lists both as tools; the code has
       neither, and `tg-ai plan list` / `plan show` cover the same ground from
@@ -392,6 +405,20 @@ rationale for each lives:
 - [ ] **About → Releases / Packages checkboxes** — tick only once there is
       something behind them.
 - [ ] **Social preview image** (Settings → General), 1280×640.
+- [ ] **Register the PyPI pending publisher.**
+      [pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/)
+      → *Add a new pending publisher*, with exactly: project `telegram-ai-cli`,
+      owner `stufently`, repository `telegram-ai-cli`, workflow `release.yml`,
+      environment `pypi`. "Pending" is the form for a project that does not
+      exist yet; the first upload creates it. Until this is done the publish job
+      fails closed. Full context: README → Releasing.
+- [ ] **Create the `pypi` GitHub environment** (Settings → Environments), named
+      exactly that — the name is half of the trust relationship above. Worth a
+      required reviewer on it: that gate is the last point at which a release
+      can be stopped after a tag is pushed.
+- [ ] **Then push the first `v*` tag** — after bumping `version` in
+      `pyproject.toml` and landing it on `main`. The workflow refuses to build
+      if the tag and `pyproject.toml` disagree.
 - [ ] **When PyPI publication happens:** re-check `keywords`, `description` and
       `[project.urls]` in `pyproject.toml`, and register the project on an MCP
       registry under the same name and description.

@@ -26,5 +26,17 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 
-# Build backend pin — keeps the builder stage reproducible too.
+# Build backend pin — keeps the builder stage reproducible too. `wheel` is here
+# for the same reason: `python -m build` resolves the whole `[build-system]
+# requires` list inside a fresh isolated environment, so an unpinned entry there
+# is "whatever was on PyPI that minute" no matter what the outer environment
+# holds. release.yml exports PIP_CONSTRAINT so this file reaches that
+# environment too (raised by review, 2026-08-23).
 setuptools==84.0.0
+wheel==0.48.0
+
+# Release tooling, installed only by .github/workflows/release.yml. Pinned for
+# the same reason as everything above: the one run that builds a version that
+# can never be replaced is the worst place for "whatever pip resolved today".
+build==1.5.0
+twine==7.0.0

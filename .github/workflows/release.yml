@@ -1,19 +1,35 @@
-# Publication to PyPI is deliberately DEFERRED (owner decision, see
-# docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md §12.5): a name
-# claimed on a public registry is claimed forever, and that call is made once,
-# separately, not by this file existing. This workflow must stay correct and
-# ready to run, but its trigger is scoped so it can NEVER fire on an ordinary
-# push to main -- only on pushing a `v*` tag, which nobody does by accident.
+# Publishing to PyPI, from a tag, with no token stored anywhere.
+#
+# The trigger is scoped so this can NEVER fire on an ordinary push to main —
+# only on pushing a `v*` tag, which nobody does by accident. A version on PyPI
+# cannot be replaced or re-uploaded, so every check that can be made before the
+# upload is made before the upload, and the job fails rather than guesses.
+#
+# Upload credentials: **none**. PyPI Trusted Publishing (OIDC) exchanges the
+# short-lived token GitHub mints for this specific workflow, in this specific
+# repository, in this specific environment, for a one-off upload credential —
+# so there is no API token in a repo secret to leak, rotate, or forget about.
+# It requires a one-time registration on PyPI's side, and the four values it is
+# registered against are load-bearing, not decorative:
+#
+#     owner        stufently
+#     repository   telegram-ai-cli
+#     workflow     release.yml        <- the *file name* of this file
+#     environment  pypi               <- the `environment:` on publish-pypi
+#
+# Renaming this file or that environment silently breaks the trust relationship
+# and the publish fails closed. See README "Releasing" for the owner's steps.
 #
 # Actions are pinned to a commit SHA for the same reason as in ci.yml (mutable
-# upstream tags). Verified via `gh api repos/<owner>/<repo>/releases/latest`
-# and the matching git ref on 2026-08-23:
+# upstream tags). Each was resolved from its tag through the GitHub API on
+# 2026-08-23 — `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing
+# the annotated tag object to the commit it points at:
 #   actions/checkout               v7.0.1   -> 3d3c42e5aac5ba805825da76410c181273ba90b1
-#   actions/setup-python            v7.0.0   -> 5fda3b95a4ea91299a34e894583c3862153e4b97
-#   actions/upload-artifact         v7.0.1   -> 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-#   actions/download-artifact       v8.0.1   -> 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-#   pypa/gh-action-pypi-publish     v1.14.2  -> dc37677b2e1c63e2034f94d8a5b11f265b73ba33
-#   softprops/action-gh-release     v3.0.2   -> fe965f7af51af5f2602596916f38a38df2e33de0
+#   actions/setup-python           v7.0.0   -> 5fda3b95a4ea91299a34e894583c3862153e4b97
+#   actions/upload-artifact        v7.0.1   -> 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+#   actions/download-artifact      v8.0.1   -> 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+#   pypa/gh-action-pypi-publish    v1.14.2  -> dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+#   softprops/action-gh-release    v3.0.2   -> 3d0d9888cb7fd7b750713d6e236d1fcb99157228
 name: Release
 
 on:
@@ -21,29 +37,184 @@ on:
     tags:
       - "v*"
 
+# `cancel-in-progress: false`, unlike ci.yml: a run that is halfway through an
+# upload must not be cut in half. Nothing supersedes a release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
 jobs:
+  # The full CI matrix, called rather than copied. A tag that cannot pass the
+  # tests on every supported Python does not become a release.
+  tests:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
     name: Build sdist + wheel
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
+
+      # Before anything is built, let alone uploaded. setuptools takes the
+      # version from pyproject.toml and PyPI takes it from the package
+      # metadata — the tag is not consulted by either. So a tag that disagrees
+      # with pyproject.toml would publish one number under a release everybody
+      # reads as another, permanently. Refuse instead.
+      - name: Tag and pyproject must name the same version
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import tomllib
+
+          tag = os.environ["GIT_TAG"]
+          if not tag.startswith("v"):
+              sys.exit(f"::error::tag {tag!r} does not start with 'v'")
+          from_tag = tag.removeprefix("v")
+          with open("pyproject.toml", "rb") as handle:
+              declared = tomllib.load(handle)["project"]["version"]
+          if from_tag != declared:
+              sys.exit(
+                  f"::error::tag {tag} says version {from_tag}, pyproject.toml says "
+                  f"{declared}. Nothing is published while they disagree: the upload "
+                  f"would carry {declared}, under a release everyone reads as "
+                  f"{from_tag}, and a version on PyPI cannot be replaced. Fix "
+                  f"pyproject.toml and move the tag."
+              )
+          print(f"tag and pyproject.toml agree on {declared}")
+          PY
+
       - name: Install build backend
-        run: python -m pip install --constraint constraints.txt build
+        run: python -m pip install --constraint constraints.txt build twine
+
+      # PIP_CONSTRAINT, not just the `--constraint` above: `python -m build`
+      # resolves `[build-system] requires` in a *fresh isolated environment*,
+      # where nothing installed here is visible — so without this the pinned
+      # setuptools and wheel apply to the outer environment and the build uses
+      # whatever PyPI served that minute. Absolute, because that environment's
+      # pip does not run in this directory (raised by review, 2026-08-23).
       - name: Build distributions
+        env:
+          PIP_CONSTRAINT: ${{ github.workspace }}/constraints.txt
         run: python -m build --sdist --wheel --outdir dist/
+
+      # Two failures that both look like a successful release: an archive built
+      # for a different version than the tag, and an archive that validates,
+      # uploads and installs while containing none of the code. The second has
+      # happened in this repository — an unanchored `accounts/` in .gitignore
+      # excluded the `telegram_ai_cli/accounts/` source package, and a shared
+      # build directory once shipped an empty `__init__.py` (see CHANGELOG).
+      # So the archives are compared against the working tree, not spot-checked.
+      - name: The archives carry this version, and all of the package
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel_filename
+          from packaging.version import Version
+
+          version = Version(os.environ["GIT_TAG"].removeprefix("v"))
+          name = canonicalize_name("telegram-ai-cli")
+
+          dist = Path("dist")
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              found = sorted(p.name for p in dist.iterdir())
+              sys.exit(f"::error::expected one wheel and one sdist in dist/, found {found}")
+          wheel, sdist = wheels[0], sdists[0]
+
+          # Parsed rather than string-matched: a build back end writes the PEP 440
+          # *normalized* version into the file name, so `1.0-rc1` in pyproject.toml
+          # produces `1.0rc1` here. Comparing the raw strings would reject a
+          # perfectly good release (raised by review, 2026-08-23).
+          built_wheel_name, built_wheel_version, _, _ = parse_wheel_filename(wheel.name)
+          built_sdist_name, built_sdist_version = parse_sdist_filename(sdist.name)
+          for label, built_name, built_version in (
+              ("wheel", built_wheel_name, built_wheel_version),
+              ("sdist", built_sdist_name, built_sdist_version),
+          ):
+              if built_name != name:
+                  sys.exit(f"::error::{label} is named {built_name}, expected {name}")
+              if built_version != version:
+                  sys.exit(f"::error::{label} is version {built_version}, tag says {version}")
+
+          expected = {str(p) for p in Path("telegram_ai_cli").rglob("*.py")}
+          if not expected:
+              sys.exit("::error::no source files found to check the archives against")
+
+          with zipfile.ZipFile(wheel) as archive:
+              wheel_names = set(archive.namelist())
+              in_wheel = {i.filename for i in archive.infolist() if i.file_size > 0}
+          with tarfile.open(sdist) as archive:
+              in_sdist = {
+                  m.name.split("/", 1)[1]
+                  for m in archive.getmembers()
+                  if m.isfile() and m.size > 0 and "/" in m.name
+              }
+
+          for label, archive_path, present in (
+              ("wheel", wheel, in_wheel),
+              ("sdist", sdist, in_sdist),
+          ):
+              missing = sorted(expected - present)
+              if missing:
+                  sys.exit(
+                      f"::error::{label} {archive_path.name} is missing {len(missing)} "
+                      f"source file(s), or ships them empty: {missing[:10]}"
+                  )
+
+          # Zero bytes by design, so it cannot be checked with the rest: the
+          # `Typing :: Typed` classifier is a lie without it, and the lie is
+          # invisible until a downstream type checker quietly ignores this
+          # package.
+          if "telegram_ai_cli/py.typed" not in wheel_names:
+              sys.exit("::error::wheel ships no py.typed, but pyproject claims Typing :: Typed")
+          print(f"{len(expected)} source files present and non-empty in both archives")
+          PY
+
+      # What PyPI itself runs on the metadata before it will accept an upload:
+      # a broken long-description content type or an unrecognised classifier is
+      # a rejection *after* the version number is spent, so it is answered here.
+      - name: Validate the metadata PyPI will read
+        run: python -m twine check --strict dist/*
+
+      # Written to a directory of its own: `dist/` is handed to the publisher
+      # verbatim, and a checksums file in it would be offered to PyPI as though
+      # it were a distribution.
       - name: Generate checksums
-        working-directory: dist
-        run: sha256sum * > SHA256SUMS.txt
+        run: |
+          mkdir -p checksums
+          (cd dist && sha256sum -- *) > checksums/SHA256SUMS.txt
+          cat checksums/SHA256SUMS.txt
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checksums
+          path: checksums/
           if-no-files-found: error
 
   publish-pypi:
@@ -51,15 +222,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment:
+      # Registered on PyPI as this project's trusted publisher environment.
+      # The name is part of the trust relationship — see the header.
       name: pypi
       url: https://pypi.org/project/telegram-ai-cli/
     permissions:
-      # OIDC token exchanged for a short-lived upload credential -- no PyPI
-      # token is stored as a repo secret at all. Requires the "telegram-ai-cli"
-      # trusted publisher to actually be configured on PyPI's side first; this
-      # job will fail closed (no such thing as an accidental anonymous upload)
-      # until that one-time setup happens as part of the deferred publish
-      # decision.
+      # The only elevated permission anywhere in this workflow, and it is on
+      # the one job that needs it: an OIDC token exchanged for a short-lived
+      # upload credential. No PyPI token is stored as a repo secret at all.
+      # Until the pending publisher is registered on PyPI's side this job fails
+      # closed — there is no such thing as an accidental anonymous upload.
       id-token: write
     steps:
       - name: Download distributions
@@ -71,13 +243,16 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/
-          # Distinct artifact from the sdist/wheel; PyPI itself does not
-          # accept a checksums file as a release asset.
+          # A re-run over a version PyPI already holds is an error, not a
+          # no-op: it means the tag was moved, and the artifact on PyPI is not
+          # the one this run built.
           skip-existing: false
 
   github-release:
     name: Draft GitHub Release
-    needs: build
+    # After the upload, not beside it: a draft release for a version that
+    # never reached PyPI is a release note for something nobody can install.
+    needs: publish-pypi
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,8 +262,13 @@ jobs:
         with:
           name: dist
           path: dist/
+      - name: Download checksums
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: checksums
+          path: dist/
       - name: Create draft release with checksums
-        uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           # Draft, not published: a human reviews and hits "Publish release"
           # deliberately, mirroring the same "no accidental publish" posture

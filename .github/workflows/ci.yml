@@ -14,6 +14,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Callable from release.yml, so a tagged release runs *this* matrix rather
+  # than a copy of it. A copy is the failure mode worth avoiding: it drifts,
+  # and the version that drifts is the one nobody looks at until a release
+  # publishes something the tests it did not run would have caught.
+  workflow_call:
 
 # A second push to the same branch/PR supersedes the still-running one.
 concurrency:
