@@ -974,6 +974,27 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **A login rewrote the account row before it took the session lock.**
+  `login_and_register` and `qr_login_and_register` wrote `phone`, `source`,
+  `session_path` and `status` — the four columns the loader reads to decide what
+  to connect — and only then connected, where the lock is taken. Aimed at an
+  account something else had open, that repointed a row underneath a live client
+  and then marked it `auth_failed`, reporting a failure whose damage was already
+  done. The lock is now taken first and held across the whole sign-in (passed
+  into `_authorise`, since `flock` cannot be acquired twice even in one
+  process), so the refusal arrives with nothing written. With `--replace` the
+  material the row names and the session file about to be written can be two
+  different auth keys; both are held. A login that fails for any other reason
+  still leaves the row with the error recorded; whether an existing registration
+  should instead be restored is an open question in `TASKS.md`, raised by
+  review. So is the one case this lock still does not cover — a *first* login,
+  where the lock's identity changes under it the moment the session file is
+  created. Neither is introduced here: both predate the change and are recorded
+  rather than quietly inherited.
+
+  The lock's own release moved into a `finally` of its own, so a failure while
+  hardening the session file cannot strand an auth key until the process exits.
+
 - **A numeric peer id from the terminal was resolved as a phone number.** Every
   `int | str` field in the registry belongs to a write, and the CLI generator
   collapsed that union to `str` — so `--chat -1001234567890` reached Telethon as

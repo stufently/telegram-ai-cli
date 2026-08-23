@@ -20,12 +20,14 @@ import pytest
 
 import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
 import telegram_ai_cli.ops.accounts as account_ops
-from telegram_ai_cli.accounts.login import LoginResult
+from telegram_ai_cli.accounts.lock import SessionLock
+from telegram_ai_cli.accounts.login import LoginResult, login_and_register, session_file_lock
 from telegram_ai_cli.accounts.models import AccountSource, AccountStatus
+from telegram_ai_cli.accounts.paths import SessionPaths, session_lock_path
 from telegram_ai_cli.cli import _attach
 from telegram_ai_cli.config import PathsConfig, Settings
 from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import ErrorCode, InvalidInput
+from telegram_ai_cli.errors import ErrorCode, InvalidInput, SessionLocked
 from telegram_ai_cli.ops.accounts import (
     AddAccountInput,
     LoginInput,
@@ -193,3 +195,167 @@ async def test_login_will_not_quietly_replace_an_imported_account(tmp_path) -> N
 
         with pytest.raises(InvalidInput, match="replace"):
             await handle_account_login(ctx, LoginInput(label="legacy", phone="+15551234"))
+
+
+# --- a login does not rewrite a row another process is using -----------------
+
+
+async def test_a_login_on_a_connected_account_changes_nothing(tmp_path) -> None:
+    """The row moves under the same lock the connection will run under.
+
+    `upsert` rewrites `phone`, `source`, `session_path` and `status` — the four
+    columns the loader reads to decide what to connect. Written before the lock
+    was taken, they landed on a row a live client was reading from, and the
+    `SessionLocked` that the login then raised a moment later reported a failure
+    whose damage was already done: the account was repointed *and* marked
+    `auth_failed` while it was still running fine somewhere else.
+
+    Nothing here is mocked away, because the property is about the order of two
+    real side effects. The lock stands in for the other process.
+    """
+    with context_over(tmp_path) as ctx:
+        registry = ctx.accounts
+        await handle_account_add(
+            ctx,
+            AddAccountInput(label="work", phone="+15551234", proxy="socks5://proxy.example:1080"),
+        )
+        before = registry.store.get("work")
+        assert before is not None
+
+        paths = registry.paths_for("work")
+        holder = SessionLock(session_file_lock(paths)).acquire()
+        try:
+            with pytest.raises(SessionLocked):
+                await login_and_register(
+                    registry.store,
+                    label="work",
+                    phone="+15559999",
+                    sessions_dir=registry.sessions_dir,
+                    replace=True,
+                )
+        finally:
+            holder.release()
+
+        after = registry.store.get("work")
+
+    assert after is not None
+    assert after.phone == before.phone, "a refused login rewrote the number"
+    assert after.status == before.status, "a refused login marked a running account failed"
+    assert after.last_error == before.last_error
+    assert after.source == before.source
+    assert after.session_path == before.session_path
+
+
+async def test_the_login_itself_still_takes_the_lock_when_nobody_handed_it_one(
+    tmp_path, monkeypatch
+) -> None:
+    """`_authorise` borrows a caller's lock; on its own it must still take one.
+
+    The two paths differ by one branch, and the one that matters least — a
+    direct `interactive_login`, which the tests and any future caller use — is
+    the one with no caller holding anything.
+    """
+    from telegram_ai_cli.accounts import login as login_mod
+
+    paths = SessionPaths(tmp_path / "sessions", "solo")
+    holder = SessionLock(session_file_lock(paths)).acquire()
+    try:
+        with pytest.raises(SessionLocked):
+            await login_mod.interactive_login(
+                label="solo",
+                phone="+15551234",
+                sessions_dir=tmp_path / "sessions",
+            )
+    finally:
+        holder.release()
+
+
+async def test_a_replacing_login_also_holds_the_material_it_is_replacing(tmp_path) -> None:
+    """With `--replace` the two locks can be two different auth keys.
+
+    The row names a `.session` the operator adopted from somewhere else
+    (`account add --session-file …` without copying); the login is about to
+    write this label's own. Those are separate files with separate locks, so
+    holding only the one about to be written would leave the *running* account
+    free to be repointed underneath itself — the whole failure, merely moved.
+
+    Not every source splits like this: a `tdata` row locks its *converted*
+    `.session`, which is this label's own file, so there both locks are one.
+    The premise is asserted below rather than assumed, because a test whose two
+    locks are secretly the same proves nothing about holding two.
+    """
+    with context_over(tmp_path) as ctx:
+        registry = ctx.accounts
+        store = registry.store
+        adopted = tmp_path / "elsewhere" / "legacy.session"
+        adopted.parent.mkdir(parents=True)
+        adopted.write_bytes(b"")
+        store.upsert(
+            "legacy",
+            AccountSource.SESSION_FILE,
+            session_path=str(adopted),
+            phone="+15551234",
+        )
+        before = store.get("legacy")
+        assert before is not None
+
+        paths = registry.paths_for("legacy")
+        current = session_lock_path(str(before.source), before.session_path, paths)
+        assert current != session_file_lock(paths), (
+            "the two locks must differ, or this proves nothing"
+        )
+
+        holder = SessionLock(current).acquire()
+        try:
+            with pytest.raises(SessionLocked):
+                await login_and_register(
+                    store,
+                    label="legacy",
+                    phone="+15559999",
+                    sessions_dir=registry.sessions_dir,
+                    replace=True,
+                )
+        finally:
+            holder.release()
+
+        after = store.get("legacy")
+
+    assert after is not None
+    assert after.source == before.source, "a refused login repointed a running account"
+    assert after.session_path == before.session_path
+    assert after.phone == before.phone
+    assert after.status == before.status
+
+
+async def test_a_qr_login_on_a_connected_account_changes_nothing(tmp_path) -> None:
+    """The QR flow writes the same row the same way, so it takes the same lock.
+
+    Its docstring says as much; before this it was true of the write and not of
+    the lock, in both flows.
+    """
+    from telegram_ai_cli.accounts.login import qr_login_and_register
+
+    with context_over(tmp_path) as ctx:
+        registry = ctx.accounts
+        await handle_account_add(ctx, AddAccountInput(label="work", phone="+15551234"))
+        before = registry.store.get("work")
+        assert before is not None
+
+        holder = SessionLock(session_file_lock(registry.paths_for("work"))).acquire()
+        try:
+            with pytest.raises(SessionLocked):
+                await qr_login_and_register(
+                    registry.store,
+                    label="work",
+                    sessions_dir=registry.sessions_dir,
+                    phone="+15559999",
+                    replace=True,
+                )
+        finally:
+            holder.release()
+
+        after = registry.store.get("work")
+
+    assert after is not None
+    assert after.phone == before.phone
+    assert after.status == before.status

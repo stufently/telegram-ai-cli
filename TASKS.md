@@ -471,14 +471,40 @@ is
       one coercion inside `resolve_peer` and none at the edges; it was not done
       in the same change because it alters resolution semantics for both
       surfaces at once, which wants its own review.
-- [ ] **`login_and_register` writes the account row before it takes the session
-      lock** (`accounts/login.py`), so a login that then fails on
-      `SessionLocked` has already changed `phone`, `source`, `session_path` and
-      `status` on a row another process is using. `account add` now registers
-      under the lock (`AccountRegistry.register_phone_login`); the login path
-      still needs the same treatment, ideally as one registry method that holds
-      the old auth key's lock across the whole sequence and restores the row on
-      failure.
+- [ ] **A session lock changes identity the moment its file is created, so a
+      first login is not actually exclusive.** `auth_key_id` returns
+      `path-<hash of the path>` while the file is absent and `ino-<dev>-<ino>`
+      once it exists — verified directly: the same path yields
+      `path-78fbfb…` before `write_bytes` and `ino-37-10e018d` after. A login
+      for a new account therefore holds `path-*.lock`, Telethon's `connect()`
+      creates the `.session`, and any client starting from then on computes
+      `ino-*.lock` and takes it unopposed. Two connections on one auth key is
+      what the whole mechanism exists to refuse, and Telegram may answer it by
+      revoking the session. It predates the lock-before-write fix — the old code
+      computed the path at the same point — and it is not fixable inside
+      `login.py`: `session_lock_path` is computed in four places
+      (`accounts/spec.py`, `accounts/registry.py`, `accounts/login.py` twice)
+      and the loader must agree with all of them. The fix is one stable identity
+      — hold the path-derived lock always, and the inode-derived one in addition
+      where the file exists — applied to every caller at once, which is its own
+      change and its own review. Raised by review, 2026-08-23.
+- [ ] **A failed `--replace` login destroys the registration it was replacing.**
+      `AccountStore.upsert` overwrites `source`, `session_path`, `phone` and the
+      credentials, and nulls `user_id` and `last_error`; if the sign-in then
+      fails, the row is left naming material that was never authorised, marked
+      `auth_failed`, and the working registration is gone. The current
+      behaviour is deliberate for a *new* account — a visible row with a
+      recorded error beats an orphan session file nobody knows about — but a
+      reviewer argues, with a point, that an operator who asked for a successful
+      replacement did not ask to lose the old account when it fails, and that
+      the audit log already records the attempt. Restoring is not free either:
+      `connect()` writes a live auth key into the new `.session` before the
+      sign-in completes, so a row restored without removing that file recreates
+      exactly the orphan the design avoids. The shapes worth choosing between
+      are: restore the row and delete the file this attempt created; or
+      authorise into a temporary session and publish the replacement only on
+      success. A behaviour decision for the owner, not a flag. Raised by review,
+      2026-08-23.
 - [ ] **An already-authorised session accepts a new `--phone` without checking
       it.** `interactive_login` is idempotent and returns early, but the row was
       written before that — so the number is stored as though a login had

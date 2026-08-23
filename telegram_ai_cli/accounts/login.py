@@ -101,6 +101,17 @@ class _Authorised:
     proxy_url: str | None
 
 
+def session_file_lock(paths: SessionPaths) -> Path:
+    """The lock guarding the ``.session`` a login writes.
+
+    One expression, used by the connection and by the caller that has to take
+    the lock before it — two copies would be two locks the day either one of
+    them changed, and two locks over one auth key is the collision this whole
+    mechanism exists to refuse.
+    """
+    return session_lock_path(str(AccountSource.SESSION_FILE), str(paths.session_file), paths)
+
+
 async def prompt_code(prompt: str) -> str:
     """Read the login code from the terminal without blocking the event loop."""
     return await asyncio.to_thread(_blocking_input, prompt)
@@ -142,6 +153,7 @@ async def interactive_login(
     password_cb: PasswordCallback | None = None,
     code_attempts: int = DEFAULT_CODE_ATTEMPTS,
     password_attempts: int = DEFAULT_PASSWORD_ATTEMPTS,
+    lock: SessionLock | None = None,
 ) -> LoginResult:
     """Sign one phone number in and leave an authorised session on disk.
 
@@ -171,6 +183,7 @@ async def interactive_login(
         settings=settings,
         box=box,
         sign_in=sign_in,
+        lock=lock,
     )
     log.info(
         "account %s logged in: user_id=%s phone=%s proxy=%s",
@@ -201,6 +214,7 @@ async def qr_login(
     password_cb: PasswordCallback | None = None,
     password_attempts: int = DEFAULT_PASSWORD_ATTEMPTS,
     regenerations: int = DEFAULT_QR_REGENERATIONS,
+    lock: SessionLock | None = None,
 ) -> LoginResult:
     """Sign in by showing a QR code that an authorised Telegram app scans.
 
@@ -232,6 +246,7 @@ async def qr_login(
         settings=settings,
         box=box,
         sign_in=sign_in,
+        lock=lock,
     )
     log.info(
         "account %s logged in by QR: user_id=%s phone=%s proxy=%s",
@@ -259,12 +274,19 @@ async def _authorise(
     settings: Settings | None,
     box: SecretBox | None,
     sign_in: Callable[[TelegramClient, str], Awaitable[None]],
+    lock: SessionLock | None = None,
 ) -> _Authorised:
     """Connect under the account's lock, sign in if needed, harden what is left.
 
     Both login flows run through here, which is the point: the session file, its
     permissions, the lock and the "already authorised, do nothing" shortcut are
     written once and cannot drift apart between the two.
+
+    ``lock`` is for a caller that had to take this account's lock *before*
+    calling — :func:`login_and_register` does, so that the ``accounts`` row is
+    written under the same lock the connection will run under. Passing it is not
+    an optimisation: taking it twice would fail, because ``flock`` is held by the
+    open file description rather than by the process.
     """
     from .loader import telethon_options
 
@@ -281,9 +303,13 @@ async def _authorise(
     api = resolve_api(
         label=paths.label, api_file=paths.api_file, api_id=api_id, api_hash=api_hash, box=box
     )
-    lock_path = session_lock_path(str(AccountSource.SESSION_FILE), str(paths.session_file), paths)
     client: TelegramClient | None = None
-    lock = SessionLock(lock_path).acquire()
+    # A lock supplied by the caller is already held over this same auth key, and
+    # `flock` belongs to the open file description: acquiring it a second time
+    # fails even inside one process. So the caller's lock is used as-is, and
+    # released by whoever took it.
+    borrowed = lock is not None
+    lock = lock if lock is not None else SessionLock(session_file_lock(paths)).acquire()
     try:
         # Inside the try: a failure while constructing the client must still hand
         # the auth key back, or the next attempt reports a holder that is gone.
@@ -308,8 +334,14 @@ async def _authorise(
             # prompt still leaves key material on disk at whatever the umask
             # allowed. Hardening only the happy path leaves exactly the files
             # nobody comes back to clean up.
-            harden_path(paths.session_file)
-            lock.release()
+            try:
+                harden_path(paths.session_file)
+            finally:
+                # Also in a finally: hardening touches the filesystem and can
+                # fail, and an auth key held by a lock nobody will release is
+                # an account that stays unusable until the process exits.
+                if not borrowed:
+                    lock.release()
 
     return _Authorised(
         paths=paths,
@@ -332,6 +364,49 @@ def _phone_of(me: Any) -> str:
     return raw if raw.startswith("+") else f"+{raw}"
 
 
+@contextmanager
+def _account_offline(store: AccountStore, paths: SessionPaths) -> Iterator[SessionLock]:
+    """Hold this account's auth key before the row naming it is rewritten.
+
+    ``upsert`` moves ``phone``, ``source``, ``session_path`` and ``status`` —
+    the four columns the loader reads to decide what to connect. Writing them
+    while another process has the account connected repoints a row underneath a
+    live client, and the failure that follows (``SessionLocked``, raised a
+    moment later by the connection this login was about to make) leaves the
+    damage behind and adds ``auth_failed`` to it. Taking the lock first turns
+    that into a refusal with nothing written, which is what
+    :meth:`AccountRegistry.register_phone_login` already does for the row it
+    writes.
+
+    Usually one lock: a login that is *not* repointing the label finds the row
+    already naming this same ``.session``. With ``--replace`` it can be two —
+    the material the row names now, and the session file about to be written —
+    and both have to be still before either is touched. The second is yielded,
+    because it is the one the connection itself will run under.
+    """
+    session_lock = session_file_lock(paths)
+    record = store.get(paths.label)
+    also: SessionLock | None = None
+    if record is not None:
+        current = session_lock_path(str(record.source), record.session_path, paths)
+        if current != session_lock:
+            also = SessionLock(current).acquire()
+    try:
+        held = SessionLock(session_lock).acquire()
+    except BaseException:
+        if also is not None:
+            also.release()
+        raise
+    try:
+        yield held
+    finally:
+        try:
+            held.release()
+        finally:
+            if also is not None:
+                also.release()
+
+
 async def login_and_register(
     store: AccountStore,
     *,
@@ -351,43 +426,52 @@ async def login_and_register(
 
     The row is written before the network call, so a login interrupted halfway
     leaves a visible account with a recorded error rather than an orphan session
-    file nobody knows about.
+    file nobody knows about. It is written *under the account's lock* for the
+    other half of that: an interruption is one thing, and rewriting a row a
+    running client is reading from is another. See :func:`_account_offline`.
+
+    A failed login still leaves the row, marked ``auth_failed``. Restoring what
+    was there before would undo, silently, the repointing the operator asked
+    for and leave no record that it was attempted; the recorded error is that
+    record.
     """
     paths = SessionPaths(Path(sessions_dir), label)
-    record = store.upsert(
-        paths.label,
-        AccountSource.SESSION_FILE,
-        session_path=str(paths.session_file),
-        phone=normalize_phone(phone),
-        api_id=api_id,
-        api_hash=api_hash,
-        proxy_url=validate_proxy_url(proxy_url),
-        replace=replace,
-    )
-    try:
-        result = await interactive_login(
-            label=record.label,
-            phone=phone,
-            sessions_dir=sessions_dir,
+    with _account_offline(store, paths) as lock:
+        record = store.upsert(
+            paths.label,
+            AccountSource.SESSION_FILE,
+            session_path=str(paths.session_file),
+            phone=normalize_phone(phone),
             api_id=api_id,
             api_hash=api_hash,
-            proxy_url=proxy_url,
-            settings=settings,
-            box=box,
-            code_cb=code_cb,
-            password_cb=password_cb,
+            proxy_url=validate_proxy_url(proxy_url),
+            replace=replace,
         )
-    except TelegramAIError as exc:
-        # last_error is displayed verbatim, so it gets the same redaction the
-        # loader applies. The messages raised here are careful today; the
-        # invariant must not depend on that staying true for every future
-        # Telethon error string.
-        clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
-        store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
-        raise
+        try:
+            result = await interactive_login(
+                label=record.label,
+                phone=phone,
+                sessions_dir=sessions_dir,
+                api_id=api_id,
+                api_hash=api_hash,
+                proxy_url=proxy_url,
+                settings=settings,
+                box=box,
+                code_cb=code_cb,
+                password_cb=password_cb,
+                lock=lock,
+            )
+        except TelegramAIError as exc:
+            # last_error is displayed verbatim, so it gets the same redaction the
+            # loader applies. The messages raised here are careful today; the
+            # invariant must not depend on that staying true for every future
+            # Telethon error string.
+            clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
+            store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
+            raise
 
-    store.set_user_id(record.label, result.user_id)
-    store.set_status(record.label, AccountStatus.OK, None)
+        store.set_user_id(record.label, result.user_id)
+        store.set_status(record.label, AccountStatus.OK, None)
     return result
 
 
@@ -418,43 +502,45 @@ async def qr_login_and_register(
     that row a later ``account login`` would send a code to.
     """
     paths = SessionPaths(Path(sessions_dir), label)
-    record = store.upsert(
-        paths.label,
-        AccountSource.SESSION_FILE,
-        session_path=str(paths.session_file),
-        phone=normalize_phone(phone) if phone else None,
-        api_id=api_id,
-        api_hash=api_hash,
-        proxy_url=validate_proxy_url(proxy_url),
-        replace=replace,
-    )
-    try:
-        result = await qr_login(
-            label=record.label,
-            sessions_dir=sessions_dir,
+    with _account_offline(store, paths) as lock:
+        record = store.upsert(
+            paths.label,
+            AccountSource.SESSION_FILE,
+            session_path=str(paths.session_file),
+            phone=normalize_phone(phone) if phone else None,
             api_id=api_id,
             api_hash=api_hash,
-            proxy_url=proxy_url,
-            settings=settings,
-            box=box,
-            display=display,
-            password_cb=password_cb,
+            proxy_url=validate_proxy_url(proxy_url),
+            replace=replace,
         )
-    except TelegramAIError as exc:
-        # Redacted for the same reason the phone flow redacts it: last_error is
-        # displayed verbatim, and it outlives the terminal it was raised in.
-        clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
-        store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
-        raise
+        try:
+            result = await qr_login(
+                label=record.label,
+                sessions_dir=sessions_dir,
+                api_id=api_id,
+                api_hash=api_hash,
+                proxy_url=proxy_url,
+                settings=settings,
+                box=box,
+                display=display,
+                password_cb=password_cb,
+                lock=lock,
+            )
+        except TelegramAIError as exc:
+            # Redacted for the same reason the phone flow redacts it: last_error is
+            # displayed verbatim, and it outlives the terminal it was raised in.
+            clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
+            store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
+            raise
 
-    store.set_user_id(record.label, result.user_id)
-    if result.phone != (record.phone or ""):
-        # Whoever scanned the code is the account now on this row. An unknown
-        # number clears the column rather than leaving the previous one: an
-        # empty phone is a gap, a stale one is a wrong answer that a later
-        # `account login` would act on.
-        store.set_phone(record.label, result.phone or None)
-    store.set_status(record.label, AccountStatus.OK, None)
+        store.set_user_id(record.label, result.user_id)
+        if result.phone != (record.phone or ""):
+            # Whoever scanned the code is the account now on this row. An unknown
+            # number clears the column rather than leaving the previous one: an
+            # empty phone is a gap, a stale one is a wrong answer that a later
+            # `account login` would act on.
+            store.set_phone(record.label, result.phone or None)
+        store.set_status(record.label, AccountStatus.OK, None)
     return result
 
 

@@ -1625,7 +1625,23 @@ number or a proxy password, and the log outlives the terminal.
 Registering or replacing a row is done under the account's session lock, the
 same one a running client holds: replacing an account's registration while
 something is connected underneath it is how a session file gets corrupted by its
-own reader.
+own reader. That covers `account login` and `account login-qr` as well as
+`account add` — the lock is taken *before* the row is written and held across
+the sign-in, so a login aimed at an account something else is using is refused
+with `SESSION_LOCKED` having changed nothing. (It used to write the row first
+and discover the lock a moment later, which left the account repointed and
+marked `auth_failed` while it was still running fine elsewhere.) With
+`--replace` the material the row names now and the session file about to be
+written can be two different things, and both are held still.
+
+⚠️ **One case the lock does not cover, and it predates this:** an account
+signing in for the *first* time is locked by the path of a `.session` that does
+not exist yet, and the lock's identity changes to the file's inode the moment
+Telegram creates it — so a client starting in that window computes a different
+lock file and takes it. Two connections on one auth key is exactly what this
+mechanism exists to refuse. It affects the first login of a new account only,
+and the fix is a stable lock identity across all four places that compute one.
+Tracked in [`TASKS.md`](../TASKS.md).
 
 ---
 
