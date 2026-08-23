@@ -248,18 +248,14 @@ is
       this user's processes reach; worth revisiting if it is ever put behind a
       reverse proxy, together with whether the token should be rotatable without
       a restart.
-- [ ] **Most plan operations still do not accept a `t.me` message link.** The
-      four marks (`message.react` / `unreact` / `pin` / `unpin`) do:
-      `ops/marks.resolve_message` parses the link with
-      `links.parse_telegram_link`, checks the policy, then applies the reads'
-      own `chats.guard_message_link` and `chats.message_id_from`. Everything in
-      `write.py` still hands the raw string to `client.get_entity`, so a link is
-      either resolved as a chat by Telethon or refused outright — either way the
-      number is lost. `message.reply` / `message.edit` / `message.delete` are
-      where a pasted link is the natural input, and the helper to give them is
-      already written and tested; what is missing is deciding whether it moves
-      into `write.py` or `marks.py` stays the one module that owns
-      message-addressed writes.
+- [ ] **`message.forward` still cannot be addressed by a link.** Its source is
+      `source_chat` plus `message_ids`, and it is the one message operation the
+      shared addressing does not cover: a forward reads one chat and writes
+      another, so a link in `source_chat` would need the *read* capability
+      checked against the link's chat and the *send* capability against the
+      destination — which is not the single-peer shape
+      `write.resolve_message_ids` has. Doing it properly means a two-ended
+      variant, not a flag.
 - [ ] **A reaction plan cannot say "keep the others" safely in every chat.**
       `message.react --keep-existing` computes the account's whole new list and
       sends it, because Telegram's call takes a list rather than a delta — but
@@ -479,10 +475,13 @@ is
 
 - [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in
       `cli.py` maps a `list[int]` to a single `int` (no `multiple=True`) and a
-      nested model to a string, so `message delete` / `message forward`
-      (`message_ids`), `chat create` (`users`), `chat promote` (`rights`) and
-      `chat restrict` (`restrictions`) cannot be planned from the terminal at
-      all — only through their MCP tools. Either teach the generator repeated
+      nested model to a string, so `message forward` (`message_ids`), `chat
+      create` (`users`), `chat promote` (`rights`) and `chat restrict`
+      (`restrictions`) cannot be planned from the terminal at all — only through
+      their MCP tools. `message delete` is now the exception, and only halfway:
+      since a `t.me` link may name the message, `tg-ai message delete --chat
+      https://t.me/example/412` works, while deleting a *run* of messages still
+      needs an MCP client. Either teach the generator repeated
       options and a JSON form, or say so in `--help` rather than only in
       `docs/operations.md`. The moderation operations make this sharper: `chat
       ban`, `chat unban`, `chat kick` and `chat demote` *are* usable from a

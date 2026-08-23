@@ -1100,10 +1100,10 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | Operation | CLI | Plan tool | Capability | Arguments |
 | --- | --- | --- | --- | --- |
 | `message.send` | `tg-ai message send` | `telegram_plan_send_message` | `send` | `chat`\*, `text`\*, `silent`=false, `link_preview`=true, `allow_duplicate`=false |
-| `message.reply` | `tg-ai message reply` | `telegram_plan_reply_message` | `send` | `chat`\*, `reply_to_message_id`\*, `text`\*, `silent`=false, `link_preview`=true, `allow_duplicate`=false |
+| `message.reply` | `tg-ai message reply` | `telegram_plan_reply_message` | `send` | `chat`\*, `reply_to_message_id` (or a `t.me` link as `chat`), `text`\*, `silent`=false, `link_preview`=true, `allow_duplicate`=false |
 | `message.send_file` | `tg-ai message send-file` | `telegram_plan_send_file` | `send` | `chat`\*, `path`\*, `caption`="", `reply_to_message_id`, `as_document`=false, `silent`=false, `allow_duplicate`=false |
-| `message.edit` | `tg-ai message edit` | `telegram_plan_edit_message` | `send` | `chat`\*, `message_id`\*, `text`\* |
-| `message.delete` | `tg-ai message delete` | `telegram_plan_delete_message` | `send` | `chat`\*, `message_ids`\* (list), `revoke`=true |
+| `message.edit` | `tg-ai message edit` | `telegram_plan_edit_message` | `send` | `chat`\*, `message_id` (or a `t.me` link as `chat`), `text`\* |
+| `message.delete` | `tg-ai message delete` | `telegram_plan_delete_message` | `send` | `chat`\*, `message_ids` (list; or a `t.me` link as `chat`, naming one), `revoke`=true |
 | `message.forward` | `tg-ai message forward` | `telegram_plan_forward_message` | `send` | `source_chat`\*, `message_ids`\*, `destination_chat`\*, `silent`=false, `drop_author`=false, `allow_duplicate`=false |
 | `message.schedule` | `tg-ai message schedule` | `telegram_plan_schedule_message` | `send` | `chat`\*, `text`\*, `at` (ISO-8601 **with** a UTC offset) *or* `when_online`=false, `silent`=false, `link_preview`=true |
 | `chat.mark_read` | `tg-ai chat mark-read` | `telegram_plan_mark_read` | `send` | `chat`\*, `max_message_id` |
@@ -1413,13 +1413,22 @@ timeout partway through an upload is not a failure, it is `unknown_outcome` —
 the file may well have arrived — and resolving one costs a person a look at the
 chat.
 
-- **`message_id` is optional on the four message marks because `chat` may be a
-  link.** `tg-ai message react --chat https://t.me/example/4231 --emoji 👍` takes
+- **The message id is optional wherever `chat` may be a link.** That is the four
+  marks and `message.reply` / `message.edit` / `message.delete`:
+  `tg-ai message react --chat https://t.me/example/4231 --emoji 👍` and
+  `tg-ai message edit --chat https://t.me/example/4231 --text "fixed"` both take
   the message number out of the permalink, through the same parser and the same
-  two guards the reads use: a `?comment=` link and a message link into a
+  two guards the reads use. A `?comment=` link and a message link into a
   one-to-one conversation are refused here exactly as they are there, and a link
-  that disagrees with an explicit `message_id` is refused rather than resolved in
-  somebody's favour. Pass one or the other; passing neither says so.
+  that disagrees with an explicit id is refused rather than resolved in
+  somebody's favour. Pass one or the other; passing neither says so. For
+  `message.delete`, whose argument is a *list*, a link names exactly one message
+  and is refused alongside a list of *other* ids rather than merged with it —
+  two different answers to "which messages" cannot both be right. A one-element
+  list naming the message the link already names is redundant rather than
+  contradictory, and is accepted. The id is re-derived from the
+  same argument when the plan is applied, never read back from the plan, for the
+  same reason the peer is re-resolved.
 - **Reacting replaces, unless told otherwise.** Telegram's `messages.sendReaction`
   takes the account's *complete* list of reactions for a message, never a delta —
   so `message.react` sends only the new one unless `keep_existing` is set, and

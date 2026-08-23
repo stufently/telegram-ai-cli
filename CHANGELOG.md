@@ -901,6 +901,26 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Changed
 
+- `message.reply`, `message.edit` and `message.delete` accept a `t.me` message
+  link as `chat`, the way the four message marks already did. A permalink is
+  what every Telegram client offers to copy, and it is how a person hands a
+  message over; passing one before meant Telethon resolved the chat and threw
+  the number away, so the operation acted on whatever the id argument defaulted
+  to. The addressing moved out of `ops/marks.py` into `ops/write.py`
+  (`resolve_message_target`, `resolve_message_ids`) so that a link means the
+  same thing everywhere: same parser, same two guards the reads use, and the
+  same refusal when a link and an explicit id disagree. `message.delete` takes a
+  *list*, so a link there names exactly one message and is refused alongside a
+  list of other ids rather than merged with it; a one-element list naming the
+  same message is redundant, not contradictory, and is accepted. Ids in a list
+  are now held to the same 32-bit bound as a scalar one — `Field(le=...)` on a
+  `list[int]` constrains the list, not its elements, so an id of `2**40` used to
+  reach Telethon and crash it. The id is re-derived at apply time from the
+  same argument rather than read back from the plan — the recorded number would
+  prove only that the plan still says what it said — and the duplicate ledger
+  fingerprints a reply by the id verification settled on, so the same reply
+  addressed both ways is still recognised as the same reply.
+
 - **The README no longer claims this tool handles `noforwards`.** It did not, and
   nothing in the repository ever implemented it — the line described a capability
   that existed only in the documentation. What is true is now written down in

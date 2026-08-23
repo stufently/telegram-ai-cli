@@ -42,15 +42,13 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..errors import InvalidInput
-from ..links import TelegramLink, parse_telegram_link
 from ..opspec import Operation
 from ..plans import Plan
 from ..render import quote_for_review
 from ..safety import Capability, PeerRef
-from ._common import require_peer
 from ._serialize import media_summary, reactions_summary
-from .chats import guard_message_link, message_id_from
 from .write import (
+    MAX_MESSAGE_ID,
     Resolved,
     WriteInput,
     _create,
@@ -61,7 +59,7 @@ from .write import (
     open_writer,
     peer_snapshot,
     require_planning_profile,
-    resolve_peer,
+    resolve_message_target,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -81,11 +79,6 @@ CUSTOM_EMOJI_ID = r"^[0-9]{1,20}$"
 #: which point the plan has been claimed, the rate-limit slot taken and the audit
 #: attempt written, so the ceiling is enforced on the way in instead.
 MAX_DOCUMENT_ID = 2**63 - 1
-
-#: Message ids are 32-bit and sequential per chat; `links.py` refuses a larger
-#: one in a permalink, and the explicit argument is held to the same bound so
-#: the two ways of naming a message cannot disagree about what is addressable.
-MAX_MESSAGE_ID = 2**31 - 1
 
 
 # ---------------------------------------------------------------------------
@@ -299,23 +292,6 @@ def remaining_reactions(
 # ---------------------------------------------------------------------------
 
 
-def _link_in(chat: int | str) -> TelegramLink | None:
-    return parse_telegram_link(chat) if isinstance(chat, str) else None
-
-
-async def resolve_chat_argument(
-    client: Any, chat: int | str
-) -> tuple[Resolved, TelegramLink | None]:
-    """Resolve a chat that may have arrived as a ``t.me`` link.
-
-    The link is returned rather than consumed, because only the caller knows
-    what the number in it means; here it is a message id, and dropping it would
-    act on whatever ``message_id`` happened to default to.
-    """
-    link = _link_in(chat)
-    return await resolve_peer(client, link.chat if link is not None else chat), link
-
-
 async def resolve_message(
     ctx: OperationContext,
     client: Any,
@@ -325,18 +301,22 @@ async def resolve_message(
     capability: Capability,
     action: str,
 ) -> tuple[Resolved, Any]:
-    """Resolve the chat, check the policy, then decide and fetch the message.
+    """Address the message the four marks act on, then fetch it.
 
-    The order is the point, and it is the read side's order. Policy first: a
-    malformed link is not a reason to tell a caller anything about a chat they
-    may not touch. The link guards second, because ``t.me/someone/123`` into a
-    one-to-one conversation addresses no message at all and acting on message
-    123 there would be acting on something nobody named.
+    The addressing — chat, policy, link guards, which id — is
+    :func:`write.resolve_message_target`, shared with the message operations so
+    that a link means the same thing everywhere. What stays here is the fetch:
+    these four quote the message they mark, because "put 🎉 on #412" is not
+    something anybody can approve without seeing #412.
     """
-    target, link = await resolve_chat_argument(client, chat)
-    require_peer(ctx, capability, target.ref, action=action)
-    guard_message_link(target.ref, link, what=action)
-    chosen = message_id_from(message_id, link, what=action)
+    target, chosen = await resolve_message_target(
+        ctx,
+        client,
+        chat=chat,
+        message_id=message_id,
+        capability=capability,
+        action=action,
+    )
     return target, await _fetch_message(client, target, chosen)
 
 

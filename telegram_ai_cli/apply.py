@@ -161,6 +161,11 @@ class _Prepared:
     #: already have left" line. ``None`` means "not a reaction operation";
     #: ``[]`` means "remove them all", and the two are not the same thing.
     reactions: list[dict[str, Any]] | None = None
+    #: Which message ids this plan actually addresses, decided during
+    #: verification. They are not simply the arguments: a ``t.me/…/123`` link in
+    #: the chat argument is what names the message, and the RPC step must send
+    #: the id that was checked rather than re-derive one of its own.
+    message_ids: list[int] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +402,8 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
         require_peer,
         require_planning_profile,
         resolve_join_target,
+        resolve_message_ids,
+        resolve_message_target,
         resolve_peer,
     )
 
@@ -408,8 +415,22 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
     match operation:
         case "message.send" | "message.reply" | "chat.mark_read":
             require_planning_profile(ctx, Capability.SEND, action=action)
-            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
-            require_peer(ctx, Capability.SEND, chat.ref, action=action)
+            answering: int | None = None
+            if operation == "message.reply":
+                # A reply may have been addressed by a link, which carries the
+                # id of the message being answered; `resolve_message_target`
+                # checks the peer itself, in the read side's order.
+                chat, answering = await resolve_message_target(
+                    ctx,
+                    client,
+                    chat=params.chat,  # type: ignore[attr-defined]
+                    message_id=params.reply_to_message_id,  # type: ignore[attr-defined]
+                    capability=Capability.SEND,
+                    action=action,
+                )
+            else:
+                chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+                require_peer(ctx, Capability.SEND, chat.ref, action=action)
             warnings += _check_peer(pre["peer"], chat, what="chat")
             prepared = _Prepared(
                 limit_target=str(chat.ref.peer_id),
@@ -417,13 +438,10 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 audit_peer_id=chat.ref.peer_id,
                 audit_body=getattr(params, "text", None),
                 warnings=warnings,
+                message_ids=[answering] if answering is not None else [],
             )
             if operation == "message.reply":
-                original = await _fetch_messages(
-                    client,
-                    chat,
-                    [params.reply_to_message_id],  # type: ignore[attr-defined]
-                )
+                original = await _fetch_messages(client, chat, [answering])
                 _check_messages([pre["reply_to"]], original)
             return prepared
 
@@ -494,14 +512,29 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
 
         case "message.edit" | "message.delete":
             require_planning_profile(ctx, Capability.SEND, action=action)
-            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
-            require_peer(ctx, Capability.SEND, chat.ref, action=action)
+            # Addressed from the arguments again, not from the plan: the chat may
+            # have arrived as a link, and the id inside it is re-derived for the
+            # same reason the peer is re-resolved.
+            if operation == "message.edit":
+                chat, chosen = await resolve_message_target(
+                    ctx,
+                    client,
+                    chat=params.chat,  # type: ignore[attr-defined]
+                    message_id=params.message_id,  # type: ignore[attr-defined]
+                    capability=Capability.SEND,
+                    action=action,
+                )
+                ids = [chosen]
+            else:
+                chat, ids = await resolve_message_ids(
+                    ctx,
+                    client,
+                    chat=params.chat,  # type: ignore[attr-defined]
+                    message_ids=params.message_ids,  # type: ignore[attr-defined]
+                    capability=Capability.SEND,
+                    action=action,
+                )
             warnings += _check_peer(pre["peer"], chat, what="chat")
-            ids = (
-                [params.message_id]  # type: ignore[attr-defined]
-                if operation == "message.edit"
-                else list(params.message_ids)  # type: ignore[attr-defined]
-            )
             messages = await _fetch_messages(client, chat, ids)
             expected = [pre["message"]] if operation == "message.edit" else pre["messages"]
             _check_messages(expected, messages)
@@ -519,6 +552,7 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 audit_peer_id=chat.ref.peer_id,
                 audit_body=getattr(params, "text", None),
                 warnings=warnings,
+                message_ids=ids,
             )
 
         case "message.react" | "message.unreact" | "message.pin" | "message.unpin":
@@ -882,7 +916,9 @@ async def _execute(
             message = await client.send_message(
                 prepared.peers["chat"].ref.peer_id,
                 params.text,  # type: ignore[attr-defined]
-                reply_to=params.reply_to_message_id,  # type: ignore[attr-defined]
+                # The id verification settled on, not the argument: the chat may
+                # have been a link, in which case the argument is None.
+                reply_to=prepared.message_ids[0],
                 silent=params.silent,  # type: ignore[attr-defined]
                 link_preview=params.link_preview,  # type: ignore[attr-defined]
             )
@@ -912,21 +948,21 @@ async def _execute(
             }, warnings
 
         case "message.edit":
+            asked_id = prepared.message_ids[0]
             message = await client.edit_message(
                 prepared.peers["chat"].ref.peer_id,
-                params.message_id,  # type: ignore[attr-defined]
+                asked_id,
                 params.text,  # type: ignore[attr-defined]
             )
-            asked_id = params.message_id  # type: ignore[attr-defined]
             return {"message_id": int(getattr(message, "id", None) or asked_id)}, warnings
 
         case "message.delete":
             await client.delete_messages(
                 prepared.peers["chat"].ref.peer_id,
-                list(params.message_ids),  # type: ignore[attr-defined]
+                list(prepared.message_ids),
                 revoke=params.revoke,  # type: ignore[attr-defined]
             )
-            return {"deleted": len(params.message_ids)}, warnings  # type: ignore[attr-defined]
+            return {"deleted": len(prepared.message_ids)}, warnings
 
         case "message.forward":
             sent = await client.forward_messages(
@@ -1521,7 +1557,15 @@ def _outbound_fingerprint(plan: Any, params: BaseModel, prepared: _Prepared | An
         return None
 
     extra: dict[str, Any] = {}
-    reply_to = getattr(params, "reply_to_message_id", None)
+    # Taken from verification for `message.reply`, where the argument may be
+    # None because a link named the message instead. The same reply addressed
+    # both ways is the same remark under the same message, and a fingerprint
+    # that read the raw argument would call them two different things.
+    reply_to = (
+        (prepared.message_ids[0] if prepared.message_ids else None)
+        if plan.operation == "message.reply"
+        else getattr(params, "reply_to_message_id", None)
+    )
     if reply_to is not None:
         # A reply quotes something. The same words under two different messages
         # read as two different remarks, and only one of them may be a mistake.

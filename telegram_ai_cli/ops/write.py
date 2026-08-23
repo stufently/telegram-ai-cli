@@ -34,7 +34,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,6 +44,7 @@ from ..errors import (
     PeerUnresolved,
     ProfileForbidden,
 )
+from ..links import TelegramLink, parse_telegram_link
 from ..opspec import REGISTRY, Effect, Operation
 from ..outbox import file_preview, resolve_outbound
 from ..plans import Plan
@@ -51,6 +52,7 @@ from ..render import quote_for_review, sanitize_line
 from ..safety import REMOTE_WRITE_CAPABILITIES, Capability, PeerKind, PeerRef
 from ._common import require_peer, telegram_errors
 from ._serialize import peer_ref
+from .chats import guard_message_link, message_id_from
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..context import OperationContext
@@ -63,6 +65,18 @@ MAX_MESSAGE_CHARS = 4096
 #: A single plan may not fan out into an unbounded number of deletions or
 #: forwards. Reviewing "delete these 4000 messages" is not review.
 MAX_MESSAGE_IDS = 100
+
+#: Message ids are 32-bit and sequential per chat; `links.py` refuses a larger
+#: one in a permalink, and an explicit argument is held to the same bound so the
+#: two ways of naming a message cannot disagree about what is addressable.
+MAX_MESSAGE_ID = 2**31 - 1
+
+#: The same bound as a field, for the places where ids arrive in a list.
+#: ``Field(le=...)`` on a ``list[int]`` constrains the list, not its elements,
+#: so without this an id of ``2**40`` passed validation and reached Telethon,
+#: where packing a 32-bit integer raises ``struct.error`` — an unhandled crash
+#: rather than the refusal the caller should have got.
+MessageId = Annotated[int, Field(gt=0, le=MAX_MESSAGE_ID)]
 
 #: Telegram's ceiling for the caption under a file, a quarter of what a plain
 #: message may hold. Refusing here turns a server-side rejection — arriving
@@ -300,6 +314,118 @@ async def resolve_peer(client: Any, target: str | int) -> Resolved:
     return reference(entity, target=target)
 
 
+# ---------------------------------------------------------------------------
+# addressing one message
+# ---------------------------------------------------------------------------
+#
+# A `t.me/…/123` permalink is how a person hands a message over — it is what
+# every Telegram client offers to copy. Passing one to `resolve_peer` alone
+# throws the number away: Telethon resolves the chat, and the operation then
+# acts on whatever `message_id` happened to default to.
+#
+# These live here rather than in `marks.py`, which owned them first, because
+# `write.py` is the module every other write imports. The split is by job: this
+# is *addressing* — which chat, which message id — and it stops before touching
+# the network a second time. Fetching the message and quoting it for review is
+# the caller's business, and it differs: a reply quotes what it answers, a
+# delete works from ids alone.
+
+
+def link_in(chat: int | str) -> TelegramLink | None:
+    return parse_telegram_link(chat) if isinstance(chat, str) else None
+
+
+async def resolve_chat_argument(
+    client: Any, chat: int | str
+) -> tuple[Resolved, TelegramLink | None]:
+    """Resolve a chat that may have arrived as a ``t.me`` link.
+
+    The link is returned rather than consumed, because only the caller knows
+    what the number in it means; for a message operation it is a message id,
+    and dropping it would act on whatever the id argument defaulted to.
+    """
+    link = link_in(chat)
+    return await resolve_peer(client, link.chat if link is not None else chat), link
+
+
+async def _address_message(
+    ctx: OperationContext,
+    client: Any,
+    *,
+    chat: int | str,
+    capability: Capability,
+    action: str,
+) -> tuple[Resolved, TelegramLink | None]:
+    """Resolve the chat a message operation names, and check it may be touched.
+
+    The order is the point, and it is the read side's order. Policy first: a
+    malformed link is not a reason to tell a caller anything about a chat they
+    may not touch. The link guard second, because ``t.me/someone/123`` into a
+    one-to-one conversation addresses no message at all, and acting on message
+    123 there would be acting on something nobody named.
+    """
+    target, link = await resolve_chat_argument(client, chat)
+    require_peer(ctx, capability, target.ref, action=action)
+    guard_message_link(target.ref, link, what=action)
+    return target, link
+
+
+async def resolve_message_target(
+    ctx: OperationContext,
+    client: Any,
+    *,
+    chat: int | str,
+    message_id: int | None,
+    capability: Capability,
+    action: str,
+) -> tuple[Resolved, int]:
+    """Address exactly one message: which chat, and which id in it.
+
+    Used at planning time *and* at apply time, from the same arguments. The id
+    is re-derived rather than read back from the plan for the same reason the
+    peer is re-resolved: the recorded number would prove only that the plan
+    still says what it said.
+    """
+    target, link = await _address_message(
+        ctx, client, chat=chat, capability=capability, action=action
+    )
+    return target, message_id_from(message_id, link, what=action)
+
+
+async def resolve_message_ids(
+    ctx: OperationContext,
+    client: Any,
+    *,
+    chat: int | str,
+    message_ids: list[int] | None,
+    capability: Capability,
+    action: str,
+) -> tuple[Resolved, list[int]]:
+    """Address a run of messages, or the single one a link names.
+
+    A link and a list of several ids are two different answers to "which
+    messages", so they are refused together rather than merged: quietly
+    preferring either one deletes something nobody named. A list of one goes
+    through :func:`message_id_from` like any scalar id, which accepts it when it
+    agrees with the link and refuses it when it does not — so "the link says 412
+    but you passed 87" and "you passed neither" read identically wherever a
+    message is addressed.
+    """
+    target, link = await _address_message(
+        ctx, client, chat=chat, capability=capability, action=action
+    )
+    from_link = link.message_id if link is not None else None
+    if message_ids and len(message_ids) > 1:
+        if from_link is not None:
+            raise InvalidInput(
+                f"{action}: the link names message {from_link}, and message_ids names "
+                f"{len(message_ids)} others; pass one of them, not both"
+            )
+        return target, list(message_ids)
+    single = message_ids[0] if message_ids else None
+    return target, [message_id_from(single, link, what=action)]
+
+
 def invite_hash_of(target: str) -> str | None:
     """Extract the hash of a private invite, if that is what this is."""
     match = _INVITE_LINK.match(target.strip())
@@ -412,8 +538,18 @@ class SendMessageInput(RepeatableWriteInput):
 
 
 class ReplyMessageInput(RepeatableWriteInput):
-    chat: int | str
-    reply_to_message_id: int = Field(gt=0)
+    chat: int | str = Field(
+        description=(
+            "Chat id, @username, or a t.me link. A link that names the message supplies "
+            "reply_to_message_id on its own."
+        )
+    )
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        le=MAX_MESSAGE_ID,
+        description="Id of the message to answer. Omit when the chat argument is a link to it.",
+    )
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
     silent: bool = False
     link_preview: bool = True
@@ -459,14 +595,48 @@ class SendFileInput(RepeatableWriteInput):
 
 
 class EditMessageInput(WriteInput):
-    chat: int | str
-    message_id: int = Field(gt=0)
+    chat: int | str = Field(
+        description=(
+            "Chat id, @username, or a t.me link. A link that names the message supplies "
+            "message_id on its own."
+        )
+    )
+    message_id: int | None = Field(
+        default=None,
+        gt=0,
+        le=MAX_MESSAGE_ID,
+        description="Id of the message to rewrite. Omit when the chat argument is a link to it.",
+    )
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
 
 
 class DeleteMessageInput(WriteInput):
-    chat: int | str
-    message_ids: list[int] = Field(min_length=1, max_length=MAX_MESSAGE_IDS)
+    """One or more messages in one chat, or the single one a link names.
+
+    ``message_ids`` is a list because deleting a run of one's own messages is a
+    real thing to do and Telegram takes them in one request. A link addresses
+    exactly one message, so the two ways of naming do not add up: a link plus a
+    list of *other* ids is two different answers to "which messages", and
+    picking either one silently deletes something nobody named.
+
+    A one-element list naming the message the link already names is redundant,
+    not contradictory, and is accepted — the same rule ``message.edit`` applies
+    to a scalar id. Refusing it here would make ``delete`` stricter than its
+    neighbours over a disagreement that does not exist.
+    """
+
+    chat: int | str = Field(
+        description=(
+            "Chat id, @username, or a t.me link. A link that names a message supplies "
+            "message_ids on its own — one message."
+        )
+    )
+    message_ids: list[MessageId] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_MESSAGE_IDS,
+        description="Ids to delete. Omit when the chat argument is a link to the message.",
+    )
     revoke: bool = Field(
         default=True,
         description="Delete for everyone, not only for this account.",
@@ -475,7 +645,7 @@ class DeleteMessageInput(WriteInput):
 
 class ForwardMessageInput(RepeatableWriteInput):
     source_chat: int | str
-    message_ids: list[int] = Field(min_length=1, max_length=MAX_MESSAGE_IDS)
+    message_ids: list[MessageId] = Field(min_length=1, max_length=MAX_MESSAGE_IDS)
     destination_chat: int | str
     silent: bool = False
     drop_author: bool = Field(
@@ -763,16 +933,22 @@ async def plan_reply_message(ctx: OperationContext, params: BaseModel) -> Plan:
     p = cast(ReplyMessageInput, params)
     require_planning_profile(ctx, Capability.SEND, action="message.reply")
     async with open_writer(ctx, p.account) as (label, client):
-        target = await resolve_peer(client, p.chat)
-        require_peer(ctx, Capability.SEND, target.ref, action="message.reply")
+        target, answering = await resolve_message_target(
+            ctx,
+            client,
+            chat=p.chat,
+            message_id=p.reply_to_message_id,
+            capability=Capability.SEND,
+            action="message.reply",
+        )
         # The message being answered is part of what a reviewer is approving:
         # "reply to #412" means nothing without knowing what #412 says.
-        original = await _fetch_message(client, target, p.reply_to_message_id)
+        original = await _fetch_message(client, target, answering)
 
     quoted = quote_for_review(getattr(original, "message", None) or "", limit=500)
     summary = (
         f"Reply as {label} in {describe(target)} to message "
-        f"{p.reply_to_message_id}\n"
+        f"{answering}\n"
         f"--- in reply to ---\n{quoted}\n"
         f"--- message ({len(p.text)} chars) ---\n{quote_for_review(p.text)}"
     ) + repeat_notice(p)
@@ -858,14 +1034,20 @@ async def plan_edit_message(ctx: OperationContext, params: BaseModel) -> Plan:
     p = cast(EditMessageInput, params)
     require_planning_profile(ctx, Capability.SEND, action="message.edit")
     async with open_writer(ctx, p.account) as (label, client):
-        target = await resolve_peer(client, p.chat)
-        require_peer(ctx, Capability.SEND, target.ref, action="message.edit")
-        original = await _fetch_message(client, target, p.message_id)
+        target, chosen = await resolve_message_target(
+            ctx,
+            client,
+            chat=p.chat,
+            message_id=p.message_id,
+            capability=Capability.SEND,
+            action="message.edit",
+        )
+        original = await _fetch_message(client, target, chosen)
     _require_own_message(ctx, original, action="message.edit", peer=target.ref)
 
     before = quote_for_review(getattr(original, "message", None) or "", limit=1000)
     summary = (
-        f"Edit message {p.message_id} as {label} in {describe(target)}\n"
+        f"Edit message {chosen} as {label} in {describe(target)}\n"
         f"--- current text ---\n{before}\n"
         f"--- replacement ({len(p.text)} chars) ---\n{quote_for_review(p.text)}"
     )
@@ -888,9 +1070,15 @@ async def plan_delete_message(ctx: OperationContext, params: BaseModel) -> Plan:
     p = cast(DeleteMessageInput, params)
     require_planning_profile(ctx, Capability.SEND, action="message.delete")
     async with open_writer(ctx, p.account) as (label, client):
-        target = await resolve_peer(client, p.chat)
-        require_peer(ctx, Capability.SEND, target.ref, action="message.delete")
-        originals = await _fetch_messages(client, target, p.message_ids)
+        target, chosen = await resolve_message_ids(
+            ctx,
+            client,
+            chat=p.chat,
+            message_ids=p.message_ids,
+            capability=Capability.SEND,
+            action="message.delete",
+        )
+        originals = await _fetch_messages(client, target, chosen)
     for message in originals:
         _require_own_message(ctx, message, action="message.delete", peer=target.ref)
 
