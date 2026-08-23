@@ -77,6 +77,11 @@ class ReadPolicy(BaseModel):
     allow_dialog_enumeration: bool = True
     #: Enumeration still hides private chats unless they are allowlisted.
     enumerate_dms: bool = False
+    #: The account's own device list: which apps are signed in, from roughly
+    #: where, and when. On by default — it is the account's own security
+    #: metadata, and no chat content is in it — but it carries device names and
+    #: a coarse location, so it has a switch.
+    sessions: bool = True
 
 
 class WritePolicy(BaseModel):

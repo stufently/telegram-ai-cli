@@ -149,6 +149,7 @@ whoever holds the name today.
 | `read_dm` | `safety.read.dms` | **nothing** | any read whose peer is a private chat |
 | `read_members` | `safety.read.members` | everything not denied | `chat members` |
 | `read_media` | `safety.read.media` | everything not denied | `media fetch` |
+| `read_sessions` | `safety.read.sessions` | — (a switch, on by default) | `account sessions` |
 | `send` | `safety.write.send` | **nothing** | send, reply, edit, delete, forward, mark-read |
 | `join` | `safety.write.join` | **nothing** | join, leave |
 | `admin` | `safety.write.admin` | **nothing** | create, invite, promote |

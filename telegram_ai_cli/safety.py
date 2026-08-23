@@ -35,6 +35,8 @@ class Capability(StrEnum):
     READ_DM = auto()
     READ_MEMBERS = auto()
     READ_MEDIA = auto()
+    #: The account's own device list. Account-scoped, so it names no peer.
+    READ_SESSIONS = auto()
     ENUMERATE = auto()
     SEND = auto()
     ADMIN = auto()
@@ -151,6 +153,14 @@ class SafetyKernel:
             case Capability.JOIN:
                 return safety.write.join, False
             case _:
+                # Capabilities with no peer — `enumerate`, `profile`,
+                # `read_sessions` — land here and are refused, because an empty
+                # rule with `empty_allows_all=False` denies everything. That is
+                # the safe answer to a question they were never meant to be
+                # asked: each has a `require_*` method of its own, and passing
+                # one to `check` with a peer is a caller error, not a policy
+                # decision. Fail-closed rather than raising, so a future generic
+                # caller is refused rather than crashed.
                 return PeerRule(), False
 
     def check(self, capability: Capability, peer: PeerRef) -> Decision:
@@ -216,6 +226,22 @@ class SafetyKernel:
     def require_group_creation(self) -> None:
         if not self._profile_allows(Capability.ADMIN):
             raise ProfileForbidden("creating a group requires the 'plan' profile")
+
+    def require_sessions(self) -> None:
+        """Whether the account's own authorisations may be listed.
+
+        A switch rather than a peer rule, because there is no chat to name —
+        the subject is the account itself, like a profile change. On by
+        default: it is the account's own security metadata, and "is there a
+        login here I do not recognise" is a question the threat model already
+        assumes somebody can ask. An operator who does not want device and
+        location metadata reachable from a tool call turns it off, and the
+        refusal is recorded like any other.
+        """
+        if not self._settings.safety.read.sessions:
+            raise NotAllowlisted(
+                "reading this account's sessions is disabled; set safety.read.sessions to allow it"
+            )
 
     def require_enumeration(self, *, private: bool) -> None:
         read = self._settings.safety.read

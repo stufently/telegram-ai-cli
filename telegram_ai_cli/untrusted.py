@@ -83,6 +83,15 @@ UNTRUSTED_FIELDS: frozenset[str] = frozenset(
         # Metadata, but the uploader types it: a document's declared MIME type is
         # an arbitrary string chosen by whoever sent the file, not by Telegram.
         "mime_type",
+        # A session's device and application strings. Telegram passes these
+        # through from whatever client signed in, and a client chooses them
+        # freely — so "device: Pixel 9" and "device: <an instruction>" arrive by
+        # exactly the same route.
+        "device",
+        "platform",
+        "system_version",
+        "app",
+        "app_version",
     }
 )
 
