@@ -1045,6 +1045,24 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Security
 
+- **A plan's message snapshot now identifies the attachment, not just the
+  caption.** The snapshot digested the message *body*, which is empty for every
+  photo posted without one — so two different photos under the same id produced
+  identical snapshots, and `has_media` said "yes" before and after a swap.
+  Editing a media message keeps its id, so a plan reviewed against one photo
+  could be applied to another and nothing would notice. `media_fingerprint`
+  moved to `ops/_serialize.py` and into `message_snapshot`, which puts it in
+  front of every operation that names a message rather than only the four marks
+  that had their own copy of the precondition. A snapshot written before this
+  change carries no such key and is compared against `None`, which refuses a
+  media message rather than applying an unverified one; plans expire in a day,
+  so that window is short and it closes in the safe direction. The fingerprint
+  records *every* identifiable part rather than the first one found — a live
+  photo is a photo and a video, a document can carry a cover and alternative
+  renditions, and stopping at the first would call two attachments the same one
+  whenever they agree about that part and differ about another. `has_media` is
+  compared too: an attachment *removed* since the plan was written leaves
+  nothing to fingerprint on either side.
 - `777000` (Telegram Service Notifications, where login codes and 2FA resets
   arrive) and Saved Messages are excluded as constants in `config.py`, checked
   before any allow/deny list in `safety.py` — no configuration value can reopen

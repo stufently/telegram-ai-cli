@@ -46,7 +46,7 @@ from ..opspec import Operation
 from ..plans import Plan
 from ..render import quote_for_review
 from ..safety import Capability, PeerRef
-from ._serialize import media_summary, reactions_summary
+from ._serialize import media_fingerprint, reactions_summary
 from .write import (
     MAX_MESSAGE_ID,
     Resolved,
@@ -151,29 +151,6 @@ def chosen_reactions(message: Any) -> list[dict[str, Any]]:
         order = getattr(entry, "chosen_order", None)
         picked.append((int(order) if order is not None else index, reaction_of(row)))
     return [reaction for _, reaction in sorted(picked, key=lambda pair: pair[0])]
-
-
-def media_fingerprint(message: Any) -> dict[str, Any] | None:
-    """What is attached, identified — not merely "something is attached".
-
-    A photo with no caption has an empty body, so the body digest the shared
-    snapshot records is identical for every such message. Editing a media
-    message keeps its id, which means a plan reviewed against one photo could be
-    applied to another and nothing in the snapshot would notice. These four
-    operations are the ones that act on other people's messages, so the id of
-    the photo or document is recorded next to its type and compared again at
-    apply time.
-    """
-    media = getattr(message, "media", None)
-    if media is None:
-        return None
-    summary = media_summary(message) or {}
-    inner = getattr(media, "photo", None) or getattr(media, "document", None)
-    ident = getattr(inner, "id", None)
-    return {
-        "type": summary.get("type"),
-        "id": str(ident) if ident is not None else None,
-    }
 
 
 def requested_reaction(*, emoji: str | None, custom_emoji_id: str | None) -> dict[str, Any]:
@@ -565,7 +542,6 @@ async def plan_react_message(ctx: OperationContext, params: BaseModel) -> Plan:
         preconditions={
             "peer": peer_snapshot(target),
             "message": message_snapshot(message),
-            "media": media_fingerprint(message),
             # What this account had reacted with when the plan was written. The
             # applier refuses if it moved, because the reaction API takes the
             # whole list and a stale one would silently discard something.
@@ -616,7 +592,6 @@ async def plan_unreact_message(ctx: OperationContext, params: BaseModel) -> Plan
         preconditions={
             "peer": peer_snapshot(target),
             "message": message_snapshot(message),
-            "media": media_fingerprint(message),
             "existing": existing,
             "remaining": remaining,
         },
@@ -667,7 +642,6 @@ async def plan_pin_message(ctx: OperationContext, params: BaseModel) -> Plan:
         preconditions={
             "peer": peer_snapshot(target),
             "message": message_snapshot(message),
-            "media": media_fingerprint(message),
             # Recorded so the applier can tell "still unpinned" from "somebody
             # pinned it in the meantime", and so `plan show` states the reach of
             # the act without re-deriving it from the flags.
@@ -719,7 +693,6 @@ async def plan_unpin_message(ctx: OperationContext, params: BaseModel) -> Plan:
         preconditions={
             "peer": peer_snapshot(target),
             "message": message_snapshot(message),
-            "media": media_fingerprint(message),
             "pinned": True,
         },
         summary=summary,

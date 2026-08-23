@@ -153,6 +153,72 @@ def media_summary(message: Any) -> dict[str, Any] | None:
     }
 
 
+#: The fields of a ``MessageMedia*`` that name something with a stable id, in
+#: the order a person would call the attachment by. ``photo`` and ``video``
+#: appear together on a live photo; ``alt_documents`` and ``video_cover`` hang
+#: off a document; ``story`` carries its id on the media itself rather than on
+#: an inner object, which is why plain ``id`` is in the list.
+_MEDIA_PARTS = (
+    "photo",
+    "document",
+    "video",
+    "alt_documents",
+    "video_cover",
+    "webpage",
+    "game",
+    "poll",
+    "story",
+    "id",
+)
+
+
+def _ids_of(value: Any) -> list[str]:
+    """The ids of one media field, whether it holds one object, several, or an id."""
+    items = value if isinstance(value, list) else [value]
+    found: list[str] = []
+    for item in items:
+        if item is None:
+            continue
+        ident = item if isinstance(item, int) else getattr(item, "id", None)
+        if ident is not None:
+            found.append(str(ident))
+    return found
+
+
+def media_fingerprint(message: Any) -> dict[str, Any] | None:
+    """What is attached, identified — not merely "something is attached".
+
+    A caption-less photo has an empty body, so the body digest a message
+    snapshot records is identical for every such message. Editing a media
+    message keeps its id, which means a plan reviewed against one photo could be
+    applied to another and nothing in the snapshot would notice. Recording the
+    id of the photo or document next to its type closes that.
+
+    It lives here, beside :func:`media_summary`, because every operation that
+    acts on somebody else's message needs it and the alternative is a second
+    implementation that drifts from this one.
+
+    Every identifiable part is recorded, not the first one found: an attachment
+    is not always a single object. A live photo is a photo *and* a video, a
+    document can carry a cover and alternative renditions, and taking whichever
+    came first would call two attachments the same one whenever they agree
+    about that part and differ about another.
+    """
+    media = getattr(message, "media", None)
+    if media is None:
+        return None
+    parts = {name: ids for name in _MEDIA_PARTS if (ids := _ids_of(getattr(media, name, None)))}
+    summary = media_summary(message) or {}
+    primary = next((parts[name][0] for name in _MEDIA_PARTS if name in parts), None)
+    return {
+        "type": summary.get("type"),
+        # The one a person reads in the plan preview. Comparison uses `parts`,
+        # which is the whole of it.
+        "id": primary,
+        "parts": parts,
+    }
+
+
 def _clip(text: str | None, limit: int) -> tuple[str | None, bool]:
     if not text:
         return text or None, False

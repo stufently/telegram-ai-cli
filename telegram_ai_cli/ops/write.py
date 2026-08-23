@@ -51,7 +51,7 @@ from ..plans import Plan
 from ..render import quote_for_review, sanitize_line
 from ..safety import REMOTE_WRITE_CAPABILITIES, Capability, PeerKind, PeerRef
 from ._common import require_peer, telegram_errors
-from ._serialize import peer_ref
+from ._serialize import media_fingerprint, peer_ref
 from .chats import guard_message_link, message_id_from
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -160,6 +160,12 @@ def message_snapshot(message: Any) -> dict[str, Any]:
     Editing and deleting are addressed by id, and ids are reused by nobody —
     but the *content* behind an id changes. Recording the digest lets the
     applier refuse to delete a message that is no longer the one reviewed.
+
+    The digest alone is not enough. A caption-less photo has an empty body, so
+    every such message digests identically, and swapping the attachment leaves
+    an edited message looking untouched. ``has_media`` only says whether
+    something is attached, which the swap does not change either — so the
+    attachment is identified, not merely counted.
     """
     body = getattr(message, "message", None) or ""
     return {
@@ -168,6 +174,7 @@ def message_snapshot(message: Any) -> dict[str, Any]:
         "body_sha256": text_digest(body),
         "body_len": len(body),
         "has_media": getattr(message, "media", None) is not None,
+        "media": media_fingerprint(message),
     }
 
 

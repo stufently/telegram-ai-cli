@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,13 +34,15 @@ from telegram_ai_cli.apply import _verify
 from telegram_ai_cli.audit import AuditLog
 from telegram_ai_cli.config import AuditConfig, PlansConfig, Settings
 from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import InvalidInput
+from telegram_ai_cli.errors import InvalidInput, PlanPreconditionFailed
 from telegram_ai_cli.ops.write import (
     DeleteMessageInput,
     EditMessageInput,
+    ForwardMessageInput,
     ReplyMessageInput,
     plan_delete_message,
     plan_edit_message,
+    plan_forward_message,
     plan_reply_message,
 )
 from telegram_ai_cli.opspec import REGISTRY
@@ -270,6 +272,159 @@ async def test_neither_a_link_nor_an_id_says_so(conn: sqlite3.Connection, tmp_pa
 
     with pytest.raises(InvalidInput, match="or a t.me link"):
         await plan_edit_message(ctx, EditMessageInput(chat=MARKED_GROUP_ID, text="x"))
+
+
+# --- the snapshot sees the attachment, not only the caption -----------------
+
+
+@dataclass
+class FakePhoto:
+    id: int = 90001
+
+
+@dataclass
+class FakeMediaPhoto:
+    photo: FakePhoto = field(default_factory=FakePhoto)
+    #: A live photo is a still and a video together, and Telegram keeps them in
+    #: two fields. Only one of them changing is the case a first-match
+    #: fingerprint cannot see.
+    video: FakePhoto | None = None
+
+
+async def test_deleting_a_photo_refuses_once_the_photo_has_been_swapped(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """The reviewed message and the message about to be deleted are not the same.
+
+    Both have id 412, both have an empty body, and both have "some media" — the
+    three things the snapshot used to record. Only the attachment's own id tells
+    them apart, and it is the difference between deleting the photo somebody
+    reviewed and deleting the one that replaced it.
+    """
+    message = FakeMessage(message="", media=FakeMediaPhoto())
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(ctx, DeleteMessageInput(chat=LINK), plan_delete_message)
+
+    assert plan.preconditions["messages"][0]["media"] == {
+        "type": "fakemediaphoto",
+        "id": "90001",
+        "parts": {"photo": ["90001"]},
+    }
+
+    message.media = FakeMediaPhoto(photo=FakePhoto(id=90002))
+
+    with pytest.raises(PlanPreconditionFailed, match="attachment"):
+        await _verify(ctx, client, plan, params)
+
+
+async def test_forwarding_refuses_once_the_photo_has_been_swapped(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Forwarding republishes somebody else's message — the one that was read.
+
+    It is the operation with the widest blast radius here: the swapped
+    attachment does not merely vanish, it gets copied somewhere new under the
+    approval given to a different photo.
+    """
+    message = FakeMessage(message="", media=FakeMediaPhoto())
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(
+        ctx,
+        ForwardMessageInput(
+            source_chat=MARKED_GROUP_ID,
+            message_ids=[412],
+            destination_chat=MARKED_GROUP_ID,
+        ),
+        plan_forward_message,
+    )
+
+    message.media = FakeMediaPhoto(photo=FakePhoto(id=90002))
+
+    with pytest.raises(PlanPreconditionFailed, match="attachment"):
+        await _verify(ctx, client, plan, params)
+
+
+async def test_only_half_of_a_live_photo_changing_is_still_a_change(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """The still is the same still; the video beside it is not the same video.
+
+    A fingerprint that stops at the first identifiable part calls these two
+    attachments one attachment.
+    """
+    message = FakeMessage(message="", media=FakeMediaPhoto(video=FakePhoto(id=70001)))
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(ctx, DeleteMessageInput(chat=LINK), plan_delete_message)
+
+    message.media = FakeMediaPhoto(video=FakePhoto(id=70002))
+
+    with pytest.raises(PlanPreconditionFailed, match="attachment"):
+        await _verify(ctx, client, plan, params)
+
+
+async def test_an_attachment_removed_since_the_plan_is_refused(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Deleting "that photo" when the photo is gone is not what was reviewed."""
+    message = FakeMessage(message="", media=FakeMediaPhoto())
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(ctx, DeleteMessageInput(chat=LINK), plan_delete_message)
+
+    message.media = None
+
+    with pytest.raises(PlanPreconditionFailed, match="attachment"):
+        await _verify(ctx, client, plan, params)
+
+
+async def test_an_untouched_attachment_applies(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    """The check has to let the ordinary case through, or it is not a check."""
+    message = FakeMessage(message="", media=FakeMediaPhoto(video=FakePhoto(id=70001)))
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(ctx, DeleteMessageInput(chat=LINK), plan_delete_message)
+
+    prepared = await _verify(ctx, client, plan, params)
+
+    assert prepared.message_ids == [412]
+
+
+async def test_a_plan_written_before_the_snapshot_carried_media_is_refused(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Fail closed, not open, for the day such a plan can still be pending.
+
+    An older snapshot has no `media` key at all. Treating that as "no
+    attachment" refuses a media message rather than applying an unverified one.
+    """
+    message = FakeMessage(message="", media=FakeMediaPhoto())
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(ctx, DeleteMessageInput(chat=LINK), plan_delete_message)
+    del plan.preconditions["messages"][0]["media"]
+
+    with pytest.raises(PlanPreconditionFailed, match="attachment"):
+        await _verify(ctx, client, plan, params)
+
+
+async def test_an_older_plan_still_notices_an_attachment_that_was_removed(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Without the `has_media` comparison this one passes: no fingerprint on
+    either side, because there is no attachment left to fingerprint."""
+    message = FakeMessage(message="", media=FakeMediaPhoto())
+    client = FakeClient(group(), {412: message})
+    ctx = build_ctx(conn, tmp_path, client)
+    plan, params = await _plan_and_params(ctx, DeleteMessageInput(chat=LINK), plan_delete_message)
+    del plan.preconditions["messages"][0]["media"]
+
+    message.media = None
+
+    with pytest.raises(PlanPreconditionFailed, match="attachment"):
+        await _verify(ctx, client, plan, params)
 
 
 # --- an id in a list is still a message id ---------------------------------

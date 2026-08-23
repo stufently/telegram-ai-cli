@@ -388,6 +388,28 @@ def _check_messages(expected: list[dict[str, Any]], actual: list[Any]) -> None:
             raise PlanPreconditionFailed(
                 f"message {message.id} no longer has the authorship the plan recorded"
             )
+        # A caption-less photo digests like every other caption-less photo, so
+        # the body check above cannot see a swapped attachment. `has_media` is
+        # compared as well as the fingerprint, and not only because it is
+        # implied by it: an older plan carries `has_media` but no fingerprint,
+        # and without this an attachment that has since been *removed* would
+        # compare None to None and pass.
+        if current["has_media"] != snap["has_media"]:
+            raise PlanPreconditionFailed(
+                f"message {message.id} no longer carries the attachment the plan recorded"
+                if snap["has_media"]
+                else f"message {message.id} has gained an attachment since the plan was reviewed"
+            )
+        # `snap.get` and not `snap[...]`: a plan written before the snapshot
+        # carried this key compares against None, which refuses a media message
+        # rather than waving it through. Plans expire in a day, so that window
+        # is short and it closes in the safe direction.
+        if current["media"] != snap.get("media"):
+            raise PlanPreconditionFailed(
+                f"the attachment on message {message.id} is not the one the plan was "
+                "reviewed against; the message was edited since",
+                suggestion="Reject this plan and create a new one against the current message.",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -796,7 +818,6 @@ async def _verify_mark(
     from .ops.marks import (
         chosen_reactions,
         final_reactions,
-        media_fingerprint,
         remaining_reactions,
         resolve_message,
         same_reactions,
@@ -819,16 +840,9 @@ async def _verify_mark(
         action=action,
     )
     warnings += _check_peer(pre["peer"], chat, what="chat")
+    # The attachment is checked in here now, for every operation that names a
+    # message rather than only for the four marks.
     _check_messages([pre["message"]], [message])
-    # The shared snapshot digests the *body*, which is empty for every
-    # caption-less photo. These four act on other people's messages, where an
-    # edit can swap the attachment and leave that digest untouched.
-    if media_fingerprint(message) != pre.get("media"):
-        raise PlanPreconditionFailed(
-            f"the attachment on message {message.id} is not the one the plan was "
-            "reviewed against; the message was edited since",
-            suggestion="Reject this plan and create a new one against the current message.",
-        )
 
     reactions: list[dict[str, Any]] | None = None
     if reacting:

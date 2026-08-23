@@ -787,7 +787,13 @@ async def test_a_swapped_attachment_is_caught_even_though_the_caption_never_chan
     plan, params = await _plan_and_params(
         ctx, PinMessageInput(chat=MARKED_GROUP_ID, message_id=412), plan_pin_message
     )
-    assert plan.preconditions["media"] == {"type": "fakemediaphoto", "id": "90001"}
+    # In the shared message snapshot, so that every operation naming a message
+    # gets it — not in a key only the four marks write.
+    assert plan.preconditions["message"]["media"] == {
+        "type": "fakemediaphoto",
+        "id": "90001",
+        "parts": {"photo": ["90001"]},
+    }
     # The reviewer was told which attachment it is, not merely that there is one.
     assert "90001" in plan.summary
 
