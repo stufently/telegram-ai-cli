@@ -41,12 +41,17 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | --- | --- |
 | `tg-ai fleet` | Which accounts are configured, authorized, expired or locked right now |
 | `tg-ai chats` | Which chats exist, and what their chat id is (search by title) |
-| `tg-ai chat read` | What was said in a chat — paged with `--before-id`, with media metadata |
+| `tg-ai chat read` | What was said in a chat — paged with `--before-id`, filtered to one forum topic with `--topic-id`, with media metadata |
+| `tg-ai chat topics` | Which topics a forum supergroup has, and where the unread messages are |
 | `tg-ai inbox` | What's waiting for a reply right now, across every configured account |
-| `tg-ai search` | Which messages match a phrase, and where |
+| `tg-ai watch` | Wait for the next incoming message instead of polling for it — a burst of fast replies comes back as one answer, and the wait is capped |
+| `tg-ai search` | Which messages match a phrase, and where — with `--context N`, the messages either side of each match |
 | `tg-ai whois` | Who a `@username`, a numeric id, or an invite link resolves to |
 | `tg-ai chat members` | Who's in a chat, and who administers it |
 | `tg-ai media fetch` | Save a message's photo, video or document to a server-controlled path |
+| `tg-ai drafts` | What was started and never sent, and in which chat |
+| `tg-ai scheduled` | What is queued to be sent to a chat later, and when |
+| `tg-ai account sessions` | Which devices and apps this account is signed in on — and whether one of them isn't yours |
 | `tg-ai message send` / `chat join` / `chat promote` / … | Validate and save an intent — send, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
 | `tg-ai plan list` / `plan show <id>` | See what's waiting for a decision, and exactly what applying it would do |
 | `tg-ai plan apply <id>` | Carry out exactly what a saved plan describes |
@@ -217,7 +222,7 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
 
 ## MCP tools
 
-Twenty-one tools: nine read tools, and twelve plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
+Twenty-eight tools: sixteen read tools, and twelve plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
 telegram_fleet             telegram_plan_send_message     telegram_plan_join_chat
@@ -229,13 +234,30 @@ telegram_whois             telegram_plan_mark_read        telegram_plan_set_prof
 telegram_chat_members
 telegram_media_fetch
 telegram_message_reactions
+telegram_chat_topics
+telegram_watch
+telegram_drafts
+telegram_scheduled
+telegram_sessions
+telegram_mentions
+telegram_folders
 ```
+
+`telegram_folders` reads the chat folders the user already arranged by hand, and `telegram_chats` / `telegram_inbox` take a `folder` argument that narrows a listing to one. A folder is the user's own sorting, never a permission: the filter runs after the policy, so a folder that names a chat this configuration may not enumerate does not make it appear.
 
 `tg-ai account add` and `tg-ai account login` are absent from this list on purpose, and the registry refuses to publish them: signing in asks a person for the code Telegram sent to their phone, and enrolling an account widens the very fleet every allowlist is written against.
 
 `telegram_media_fetch` looks like a read tool but isn't one — it writes a file, so it goes through the same server-controlled path handling as everything else that touches disk: the caller never supplies a path, the file lands under a download root with a generated name (`O_CREAT|O_EXCL|O_NOFOLLOW`, a size cap and a running quota), and only an opaque `artifact_id` comes back.
 
 No read tool ever marks a chat read — `mark_read` only exists as an explicit plan operation, because an agent asked to "just look" at a chat should never have a side effect on what the other person sees as unread. That includes the read-state block `telegram_chat_read` returns: it comes from a call that *describes* a dialog's read pointers without acknowledging anything in it.
+
+`telegram_watch` is the alternative to asking `telegram_inbox` again in a loop. It blocks until a message arrives in a chat the policy already permits, and hands back the whole burst in one answer: four fast replies wake the caller once, not four times — polling costs a turn (and the system prompt with it) whether or not anything happened, and re-creating that cost inside the waiting tool would defeat the point. The wait is capped at five minutes by the schema itself, because an MCP client cannot abandon a call it is waiting on; coming back empty at the ceiling is a result with a `waited_sec` on it, not an error. Messages from chats the configuration refuses are not reported at all — not even as the fact that *something* happened, which would say a specific conversation was active at a specific second. **It holds that account's session lock for the duration**: one auth key allows one connection, so nothing else can use the same account until the wait returns. See [`docs/operations.md`](docs/operations.md#telegram_watch--tg-ai-watch).
+
+`telegram_sessions` answers the question the rest of this README keeps assuming somebody can ask — *which devices is this account signed in on, and is one of them not mine?* It reads and nothing else: **no operation in this project ends a session**, deliberately, because a read tool that can log a device out can log the owner's own phone out with no plan step in the way. The row carries the device, the app, the country and the dates in full; the IP address is cut to its network (`198.51.x.x`) and the authorisation hash — the handle a terminating call would take — is not returned at all. The reasoning is in [`docs/operations.md`](docs/operations.md#what-a-session-row-may-carry-and-why).
+
+`telegram_drafts` and `telegram_scheduled` cover what a history read cannot see: text that was started and never sent, and messages queued to go out later. Both are read-only in the same strong sense — nothing clears a draft or cancels a send. Drafts are filtered chat by chat against the read policy, and a draft in Saved Messages or Service Notifications is not listed *or counted*, since a withheld tally would still say one exists there.
+
+`telegram_mentions` is the other half of that promise, and the one place where getting it wrong is invisible. Telegram counts unread *mentions* and unread *reactions* separately from plain unread, and Telethon's namespace puts `GetUnreadMentionsRequest` one letter from `ReadMentionsRequest` — the first asks which mentions are unread, the second clears them on every device the owner has. Only the `Get` pair is ever issued, and the test asserts on the whole list of requests the operation made rather than on its answer. Those same two counters rank `telegram_inbox`: a chat where somebody called your name outranks a chat that is merely busy.
 
 `telegram_message_reactions` reports counts, not people. Telegram can name everyone who reacted; that request is never made, and where the roster is unavailable the payload says so rather than leaving a gap. Reacting is a write and has no tool at all.
 

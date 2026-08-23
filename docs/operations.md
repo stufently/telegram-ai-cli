@@ -63,11 +63,13 @@ So human-authored values are delimited on the way out:
 ```
 
 **Which values.** Message bodies, media captions, display names, chat titles,
-inbox previews, forwarded-from names, profile text, admin ranks, and a
-document's `mime_type` — that last one because the *uploader* types it, not
-Telegram. Matched by field name while the payload is walked, so a field added to
-a serializer later is covered by default rather than by memory. The list is
-`untrusted.UNTRUSTED_FIELDS`.
+inbox previews, forwarded-from names, profile text, admin ranks, a document's
+`mime_type` — that one because the *uploader* types it, not Telegram — and the
+`device` / `platform` / `system_version` / `app` / `app_version` strings of a
+session, for the same reason: Telegram passes them through from whatever client
+signed in, and a client names itself whatever it likes. Matched by field name
+while the payload is walked, so a field added to a serializer later is covered
+by default rather than by memory. The list is `untrusted.UNTRUSTED_FIELDS`.
 
 **Which values are not.** Ids, dates, counts, booleans, permalinks and file
 sizes are this project's own words about the data, and a parser has to keep
@@ -123,7 +125,7 @@ instruction — and neither substitutes for the other.
 
 ## Read operations
 
-Nine, all immediate on both surfaces. None of them marks anything as read:
+Sixteen, all immediate on both surfaces. None of them marks anything as read:
 `mark_read` exists only as an explicit plan, because an agent asked to "just
 look" at a chat must not change what the other person sees as unread. That
 includes `chat read`'s read-state block, which comes from `GetPeerDialogs` —
@@ -158,6 +160,53 @@ the `chat_id` every other operation needs. Capability: `enumerate`.
 | `search` | string | — | Case-insensitive substring of the title or `@username` |
 | `include_private` | bool | `false` | Include one-to-one conversations (needs `safety.read.enumerate_dms`) |
 | `archived` | bool | `false` | List the archive instead of the main list |
+| `folder` | string | — | Only chats in this Telegram folder — its id, or the name shown in the app (see [`telegram_folders`](#telegram_folders--tg-ai-folders)) |
+
+Each row carries the three counts Telegram keeps separately: `unread` (how busy
+the chat is), `mentions` (unread mentions and replies to this account) and
+`reactions` (unread reactions on this account's own messages).
+
+### `telegram_folders` — `tg-ai folders`
+
+The account's chat folders — the sorting a *person* did by hand, read back and
+offered as a filter. Capability: `enumerate`.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use |
+| `include_private` | bool | `false` | Also name the one-to-one conversations a folder contains (needs `safety.read.enumerate_dms`) |
+
+| Field | Meaning |
+| --- | --- |
+| `folder_id` | What `chats` and `inbox` take as `folder` |
+| `title`, `emoticon` | The name and emoji shown in the app. `title` is wrapped as untrusted |
+| `shareable` | A `DialogFilterChatlist` — an invite-shared folder, which has no category flags at all and contains only the chats it names |
+| `flags` | `contacts`, `non_contacts`, `groups`, `broadcasts`, `bots` *admit* a whole category; `exclude_muted`, `exclude_read`, `exclude_archived` withhold a chat that was admitted |
+| `include_peers`, `exclude_peers`, `pinned_peers` | Chats named individually, as marked ids |
+| `hidden_peers` | How many named chats are **not** listed here, because the hard floor closes them or they are private and DM enumeration is off |
+
+**A folder is not a permission.** It is a list a user wrote, and it can name any
+chat the account can see — Saved Messages, Service Notifications, private
+conversations this configuration does not enumerate. So filtering by one runs
+*last*, over the rows a listing already decided it may show: a folder can only
+remove rows, never add one. The same rule applies to this listing, which is why
+`hidden_peers` exists — a folder that names a closed chat reports a count, not
+the id.
+
+**"All chats" is not a folder.** Telegram models it as `DialogFilterDefault`,
+which carries no id and no rules; it is skipped rather than offered as a filter
+that filters nothing.
+
+**An account with no folders gets an empty list, not an error.** Telegram
+creates none by default, and most accounts have none. The empty answer carries a
+`warning` saying so, because "no folders exist" and "the folders were filtered
+away" look identical in an empty list.
+
+Membership is decided here, not by Telegram: there is no request that answers
+"is this dialog in that folder", so clients apply the rules themselves
+(`ops/folders.py`). Naming a chat is the more specific statement, so a chat in
+`include_peers` stays in the folder even when `exclude_muted` would have
+withheld it — but `exclude_peers` beats everything.
 
 ### `telegram_chat_read` — `tg-ai chat read`
 
@@ -172,6 +221,7 @@ a private chat regardless of which read operation asked.
 | `limit` | int 1–500 | `30` | Messages to return |
 | `before_id` | int | — | Only messages older than this id — the way to page backwards |
 | `search` | string | — | Only messages containing this text |
+| `topic_id` | int | — | Only messages in this forum topic. A topic link supplies it too |
 | `include_read_state` | bool | `true` | Fetch the chat's read pointers (one extra call; marks nothing as read) |
 
 **A message link anchors the page.** `chat` used to be resolved as a chat and
@@ -182,8 +232,26 @@ says so. Passing both a message link and `before_id` is refused rather than
 resolved by preference: both position the page, and picking one silently means
 returning messages the caller did not ask for.
 
-A topic link (`t.me/c/123/12/456`, or `?thread=12`) reports its topic in
-`meta.topic_id` and warns that the page is **not** filtered to that topic.
+**A topic filter is a different request, not a filter on the same one.** With
+`topic_id` set — passed directly, or taken from a topic link (`t.me/c/123/12/456`,
+`?thread=12`) — the page is served by `messages.getReplies`, the thread hanging
+off the message that opened the topic, and `meta.topic_id` says which one. Without
+it a forum comes back interleaved: every topic's messages in one list, in an order
+no participant ever saw, which is not a partial answer but a wrong one. `before_id`
+keeps working across that switch. Three things are refused rather than guessed:
+
+- **`topic_id` on a chat that is not a forum** — there is no such thread, and the
+  empty page it would produce is indistinguishable from a quiet topic.
+- **`topic_id` together with `search`** — Telegram's replies call carries no text
+  query, and Telethon prefers that branch over the search one, so passing both
+  would drop one of them without a word. Search the whole chat and read `topic_id`
+  on each result instead.
+- **A `topic_id` that disagrees with the topic in the link** — the caller named
+  two different threads, and preferring one silently pages a topic nobody asked for.
+
+`data.read_state` on a topic page still describes the **whole chat**: a forum has
+one dialog for all of its topics. That is stated in `warnings` rather than left to
+be misread — `chat topics` is where per-topic unread counts live.
 
 **Two link shapes are refused rather than interpreted**, in every operation that
 takes one (`chat read`, `search`, `media fetch`, `message reactions`), and the
@@ -235,6 +303,9 @@ preview — so a caller writes one parser (`ops/_serialize.py`).
 | `media` | Attachment metadata; nothing is downloaded |
 | `forwarded_from` | Original author or chat, when forwarded. Wrapped as untrusted |
 
+`telegram_search` adds one field of its own, `match`, because a search can
+return messages it did not match on — see [`telegram_search`](#telegram_search--tg-ai-search).
+
 **`link` is `null` for a reason, when it is null.** A one-to-one conversation
 and a basic (non-super) group have no `t.me` address for a message. The other
 party in a DM usually *does* have a username, and `t.me/<their handle>/55` is a
@@ -268,6 +339,50 @@ Returns the per-emoji counts, a `total`, the message's permalink, and whichever
   message is already known — usually from a pasted link — and the history around
   it is not wanted.
 
+### `telegram_chat_topics` — `tg-ai chat topics`
+
+The threads a forum supergroup is divided into, so `chat read --topic-id` can
+page one of them and so "where is anyone waiting" is answerable per topic —
+which the chat-level read state cannot express, because a forum has one dialog
+for all of its threads. Capability: `read_chat`. Nothing is acknowledged.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use |
+| `chat` | string | **required** | Chat id, `@username`, or `t.me` link of a forum |
+| `limit` | int 1–500 | `50` | Topics to return |
+| `search` | string | — | Only topics whose title matches (Telegram does the matching) |
+
+**A chat that is not a forum is refused, not answered with `[]`.** "No topics"
+and "topics are not a thing here" lead to different next steps, and the empty
+list hides the useful one — so it is a `NOT_FOUND` naming the chat, suggesting
+`chat read`.
+
+One topic row:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Topic id — also the id of the message that opened it, which is what makes it a history filter |
+| `title` | What the topic is called. Wrapped as untrusted: whoever opened it typed this |
+| `deleted` | `true` for a `ForumTopicDeleted` row (see below) |
+| `created_at` | When the topic was opened, UTC ISO-8601 |
+| `top_message_id` | Newest message in the topic |
+| `unread`, `mentions`, `unread_reactions` | Per topic, as Telegram counts them. `null` on a deleted row |
+| `read_inbox_max_id` | Highest id read in this topic |
+| `closed`, `hidden`, `pinned`, `mine` | Topic state; `mine` means this account opened it |
+| `icon_color`, `icon_emoji_id` | The icon. The custom-emoji id is a **string**: it is 64-bit, and a JSON consumer parsing it as a double loses the low bits |
+| `link` | Permalink to the topic |
+
+A deleted topic keeps that shape with `deleted: true` and `null` counters rather
+than disappearing from the list: a caller that remembered the id has to learn it
+is gone, and a missing row looks like the end of a page. The draft Telegram
+attaches to a topic is deliberately **not** serialized — it is text this account
+typed and never sent, and a listing is not the place to disclose it.
+
+Only the first page is served. Telegram's cursor for topics is a triple
+(`offset_date`, `offset_id`, `offset_topic`) read off the last row; past `limit`
+the answer says `truncated` rather than pretending the forum is smaller.
+
 ### `telegram_chat_members` — `tg-ai chat members`
 
 Who is in a group or channel, and who administers it. Capability:
@@ -283,9 +398,8 @@ Who is in a group or channel, and who administers it. Capability:
 
 ### `telegram_inbox` — `tg-ai inbox`
 
-A compact, ranked summary of conversations with unread messages or mentions —
-one row per chat, not raw history. Mentions rank above volume. Capability:
-`enumerate`.
+A compact, ranked summary of conversations with unread messages, mentions or
+reactions — one row per chat, not raw history. Capability: `enumerate`.
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -294,6 +408,142 @@ one row per chat, not raw history. Mentions rank above volume. Capability:
 | `include_private` | bool | `false` | Include one-to-one conversations (needs `safety.read.enumerate_dms`) |
 | `mentions_only` | bool | `false` | Only conversations where this account was mentioned or replied to |
 | `include_muted` | bool | `false` | Include chats the user has muted |
+| `folder` | string | — | Only chats in this Telegram folder — its id, or the name shown in the app |
+
+A folder belongs to an account, so a fleet-wide sweep resolves the name once per
+account. An account that has no folder of that name contributes no rows and says
+so in `warnings`, rather than being silently absent from the answer.
+
+**Ranking: mentions, then unread reactions, then volume, then recency.** All
+three counts come from the dialog list, which Telegram keeps separately —
+`unread` is how busy a chat is, while `mentions` and `reactions` are somebody
+addressing *this account*. A reaction outranks volume deliberately: a 👍 on
+this account's own message is a response to it, where two hundred unread
+messages in a group are not. It ranks below a mention because a mention usually
+needs an answer and a reaction usually does not.
+
+`mentions_only` stays strictly about mentions — it does not quietly start
+meaning "and reactions". A row carries all three counts (`unread`, `mentions`,
+`reactions`), and `totals` sums each.
+
+### `telegram_mentions` — `tg-ai mentions`
+
+The messages behind those two counters: who mentioned or replied to this
+account and what they said, and who reacted to its own messages with which
+emoji. One row per chat, across every permitted account. Capability:
+`enumerate` to walk the dialog list, plus `read_chat` (`read_dm` for a private
+peer) **per chat** before its messages are fetched.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use; omit to sweep all of them |
+| `limit` | int 1–500 | `20` | Conversations to fetch and return |
+| `per_chat` | int 1–100 | `10` | Messages to fetch per chat, for each of mentions and reactions |
+| `include_mentions` | bool | `true` | Include unread mentions and replies |
+| `include_reactions` | bool | `true` | Include unread reactions to this account's own messages |
+| `include_private` | bool | `false` | Include one-to-one conversations (needs `safety.read.enumerate_dms`) |
+
+Each row: `account`, `chat` (the usual peer summary), `unread_mentions`,
+`unread_reactions`, `mentions` (message rows in the standard message shape) and
+`reactions`. A reaction row is the message shape for **this account's own
+message** plus `reactors`:
+
+| Field | Meaning |
+| --- | --- |
+| `peer_id` | Who reacted |
+| `name` | Their display name, where the page that carried the reaction also carried the person. Wrapped as untrusted |
+| `kind`, `emoji`, `custom_emoji_id` | Which reaction, in the same shape `telegram_message_reactions` uses |
+| `date` | When they reacted |
+
+- **Reading marks nothing as seen.** `messages.getUnreadMentions` and
+  `messages.getUnreadReactions` report; `messages.readMentions` and
+  `messages.readReactions` clear — on every device the owner has. Only the two
+  `Get` requests are ever issued, and `tests/test_mentions.py` asserts on the
+  whole list of requests the operation made, not only on its answer. An agent
+  that looked and made a badge vanish from somebody's phone has caused an
+  invisible, unrecoverable side effect.
+- **Only reactors Telegram still flags as unread are listed.** A page of unread
+  reactions carries the older reactors on the same message too, and reporting
+  those would re-announce a reaction that has already been seen. Where Telegram
+  named nobody, `reactors` is `[]` and `reactors_reason` says why — the full
+  roster is a separate privacy-gated request this tool never makes.
+- **The counters decide what is fetched.** A chat whose mention and reaction
+  counts are both zero is never asked about, and the chats are ranked and cut
+  to `limit` *before* any page is requested. A chat the read policy will not
+  open is counted in a `withheld` warning and never fetched either.
+- `total` is every chat that had something, including the ones past the cut, so
+  a short list is never mistaken for "that is all there is".
+
+### `telegram_watch` — `tg-ai watch`
+
+Waits for the next incoming message instead of being asked again. Capability:
+`read_chat` (`read_dm` for a private peer) — and `enumerate` as well when no
+chats are named, because watching everything reveals which conversations are
+active. Marks nothing as read.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use |
+| `chats` | list of strings, ≤ 20 | — | Chat ids, `@usernames` or `t.me` links to watch. Omit to watch every chat the policy permits. A comma-separated string is accepted, for the terminal |
+| `timeout_sec` | float 0 < x ≤ 300 | `60` | Longest this call may block |
+| `debounce_sec` | float 0–30 | `2` | How long the chat must stay quiet before the burst is handed back. Each new message restarts the window; `0` returns the first message alone |
+| `limit` | int 1–500 | `50` | Most messages to collect before returning even if the chat is still busy |
+
+**A burst is one answer.** Somebody typing four short replies is one event as
+far as an agent is concerned, and waking four times to read one thought
+re-creates the polling cost this operation exists to remove. The first message
+opens the debounce window and every further message restarts it, so the result
+comes back when the chat goes quiet rather than a fixed interval after the
+first message.
+
+**The wait always ends.** `timeout_sec` is capped in the published schema, so no
+argument produces an unbounded call — an MCP client has no way to abandon a tool
+call it is waiting on, and a call that could block forever is a hung session
+rather than a slow one. Returning with no events at the ceiling is a *result*,
+not an error: `events: []`, `stopped_because: "timeout"`, and `waited_sec`
+saying how long it actually waited.
+
+**A refused chat leaves no trace.** The policy filter runs *before* the debounce
+logic, so a message from a peer the configuration does not permit does not start
+a burst, does not extend one, and does not turn a silent minute into a
+"something happened" answer. Unlike `telegram_search`, this operation does
+**not** report how many events it withheld: a count of activity in chats the
+caller may not read is itself the leak, because it says a specific conversation
+was busy at a specific second. Naming a chat in `chats` narrows the watch; it
+never widens it, so a private chat that `safety.read.dms` does not allowlist is
+refused loudly when named and silently ignored when it isn't.
+
+`data`:
+
+| Field | Meaning |
+| --- | --- |
+| `watched.scope` | `named` when `chats` was given, `permitted` when it was not |
+| `watched.chats` | The resolved chats being watched, or `null` for the whole account |
+| `events` | `[{chat, message}]` — the same peer and message shapes every other read returns |
+| `waited_sec` | How long the call actually blocked |
+| `timeout_sec` | The ceiling it was given, echoed so the two can be compared |
+| `stopped_because` | `quiet` (the burst ended), `timeout` (the ceiling), or `limit` (`limit` messages collected — `meta.truncated` is set too) |
+
+**⚠️ It holds the account's session lock for the whole wait.** A Telegram
+session is a single auth key and two connections sharing it can get the session
+revoked, so `accounts/lock.py` takes an exclusive `flock` per account for as
+long as a client is open — and a watch keeps that client open until it returns.
+While a watch is running, anything else reaching for the same account (another
+`tg-ai` command, a second MCP server, a scheduled job) fails with
+`SESSION_LOCKED` naming the holding pid, and it fails immediately rather than
+queueing. This is not a bug introduced here — every operation holds the same
+lock — but a watch holds it for *minutes* rather than the fraction of a second
+a read takes, which turns a theoretical collision into a routine one. Three
+consequences worth planning around:
+
+- **The 300-second ceiling is partly this.** A longer wait would be more
+  efficient in tool calls and would make the account unusable for that long.
+- **Watch one account, wait, then act.** A watch does not sweep the fleet the
+  way `telegram_inbox` does: it uses exactly one account, so the other accounts
+  stay free.
+- **Nothing releases the lock early.** There is no way to interrupt a watch from
+  another process short of killing the one holding it; `flock` is released by
+  the kernel when that process dies.
 
 ### `telegram_search` — `tg-ai search`
 
@@ -307,8 +557,43 @@ and the number withheld is reported rather than quietly omitted.
 | `account` | string | — | Which account to use |
 | `query` | string | **required** | Text to look for |
 | `chat` | string | — | Restrict to one chat; omit to search everything visible |
-| `limit` | int 1–500 | `30` | Messages to return |
+| `limit` | int 1–500 | `30` | *Matching* messages to return; `context` adds rows on top of it |
 | `before_id` | int | — | Only messages older than this id (single-chat searches only) |
+| `context` | int 0–5 | `0` | Messages to include either side of each match (single-chat searches only) |
+
+**Every row carries `match`**, with or without `context`: `true` for a message
+that matched the query, `false` for one included as context. It is always
+present, so a caller writes one parser rather than branching on whether it asked
+for neighbours.
+
+**`context` answers "what was this about" without a second read.** One matching
+line rarely says what the conversation was; the alternative is paging the chat
+around every hit, which is another operation and a much larger answer. The
+neighbours come back in the same `messages` list, ordered newest first like
+history, so a hit and the lines around it read in order.
+
+Three things keep it from becoming a chat download:
+
+- **The radius is capped at 5**, in the schema where a caller can read it.
+- **The first 10 matches get context**, and a warning names how many did not.
+  Each enriched match costs two more history calls, so an unbounded version turns
+  a 500-hit search into a thousand requests — and Telethon puts a flood wait at
+  roughly ten history calls in quick succession, which a search that trips would
+  fail as a whole. A wider window is `chat read` around one of the hits.
+- **Overlapping windows collapse.** Two hits three messages apart share
+  neighbours; each message is emitted once, and a message that is itself a match
+  is never repeated as another hit's context.
+
+`meta` reports `matches`, `context_messages` and `context_radius` alongside
+`returned` (which counts every row). **`truncated` is about matches**, not rows:
+counting context would report a page as full because its hits brought
+neighbours. Where Telegram reported how many messages match in all, that count
+decides it; the "the page came back full" guess is only for when it did not.
+
+**A global search refuses `context`** rather than ignoring it. Each hit can be in
+a different chat, so context would mean a separate page per chat, of chats the
+caller never named — and silently returning matches without neighbours would read
+as "there were none".
 
 ### `telegram_whois` — `tg-ai whois`
 
@@ -324,6 +609,117 @@ content; the hard denylist still applies.
 
 **An invite link is described, never accepted.** Only `CheckChatInvite` is
 called; joining is a write and goes through a plan.
+
+### `telegram_drafts` — `tg-ai drafts`
+
+What was started and never sent, newest first, with the chat each draft belongs
+to. One call returns every draft the account has. Capability: `enumerate`, plus
+the read policy of each draft's own chat.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use |
+| `limit` | int 1–500 | `50` | Drafts to return |
+| `include_private` | bool | `false` | Include drafts in one-to-one conversations (needs `safety.read.enumerate_dms` *and* the chat's own `dms` allowlist entry) |
+
+**A draft is the most private thing in an account** — it is what somebody
+started writing and decided not to send — so the listing is filtered row by row
+in the kernel's own order: the hard floor, then `include_private`, then the read
+policy of the draft's chat. Drafts in Saved Messages and Service Notifications
+are neither listed **nor counted**: a "1 withheld" tally would still say a draft
+exists there, which is the fact worth hiding. Drafts withheld by the *policy*
+are counted, in `warnings`, because an unexplained short list is worse than a
+stated one.
+
+Reading a draft does not clear it, and nothing in this project can: clearing one
+would be a remote write, and there is no plan operation for it either.
+
+### `telegram_scheduled` — `tg-ai scheduled`
+
+One chat's scheduled queue, soonest first. Capability: `read_chat`, or `read_dm`
+when the peer is private.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use |
+| `chat` | string | **required** | Chat id, `@username`, or `t.me` link |
+| `limit` | int 1–500 | `50` | Messages to return |
+
+**One chat at a time, because Telegram has no global list.** Drafts have one
+call that returns all of them; scheduled messages are fetched from a chat's
+scheduled history. The asymmetry is Telegram's, and it is stated rather than
+hidden behind an optional argument that would silently return nothing.
+
+Rows are [the message shape](#the-message-shape) with three differences:
+
+- `scheduled_for` — when Telegram will send it. For a scheduled message the
+  intended send time is what sits in `date`, so it is named rather than left to
+  be mistaken for a send that happened.
+- `send_when_online` — `true` where the message goes out the moment the other
+  person appears. Telegram encodes that as a sentinel timestamp which renders as
+  19 January 2038; `scheduled_for` is `null` there rather than claiming a date.
+- `link` is always `null`. A scheduled message's id belongs to a separate
+  sequence, so a `t.me` link built from it would address a *different* message
+  in the same chat.
+
+Cancelling one, or sending it early, is not part of this project.
+
+### `telegram_sessions` — `tg-ai account sessions`
+
+Every device and application this account is signed in on — the list the threat
+model reasons about and, until now, nothing here could look at. Capability:
+`read_sessions`, which is account-scoped (there is no chat to name) and is
+switched with `safety.read.sessions`, on by default.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use — here it is the subject, not just the actor |
+
+Each row: `current`, `device`, `platform`, `system_version`, `app`,
+`app_version`, `api_id`, `official_app`, `country`, `region`, `ip_prefix`,
+`created`, `last_active`, `unconfirmed`, `password_pending`, `calls_disabled`,
+`secret_chats_disabled`. The response also carries
+`auto_terminate_after_days` — Telegram's own inactivity setting, which is half
+the answer to "how did that old device disappear".
+
+**Nothing here ends a session, and that is deliberate.** Terminating is the
+obvious next tool to reach for; it is absent from this project by decision, the
+registry is asserted to contain no operation whose name mentions it
+([`tests/test_sessions.py`](../tests/test_sessions.py)), and the payload says
+where a person does it instead. A read tool that can log a device out is a read
+tool that can log the owner's own phone out, with no plan step in the way.
+
+#### What a session row may carry, and why
+
+This is the owner's own data rather than a stranger's — which is the reason to
+trim it, not a reason to print it. The output of a tool call travels: into a
+log, into a ticket, into another model's context. The owner is the one person
+whose address cannot be un-leaked by asking them to change it.
+
+So the decision follows this repository's own rules rather than Telegram's:
+
+- **The IP address is cut to its network and the host never leaves** — the first
+  two octets of an IPv4 address (`198.51.x.x`), the first three hextets of an
+  IPv6 one (`2001:db8:85a3::`). That is the part that answers the question being
+  asked — *is this session on the same network as my others, or on another
+  continent?* — and it is the part that stays true when the payload is pasted
+  somewhere else. A full address identifies a home connection precisely.
+  [`redact.py`](../telegram_ai_cli/redact.py) masks values recognisable by
+  shape, and this repository's own privacy scan
+  ([`tests/test_no_private_data.py`](../tests/test_no_private_data.py)) treats
+  an IP address as private data by exactly that standard; a full address in the
+  payload would also collide with the phone-number rule on the way out and
+  arrive as `[redacted:phone]` — accurate about the danger, useless as an
+  answer. An address that does not parse yields `null`, never the raw string.
+- **Country and region stay whole.** They are coarse by construction, and they
+  are the fields that make a rogue session obvious at a glance.
+- **The authorisation hash is not returned at all.** It is the handle the
+  terminating call would take, no Telegram client accepts it from a person, and
+  publishing an identifier whose only use is the operation this project refuses
+  to have is an invitation to add that operation.
+- **Device and application names are wrapped as untrusted text.** They are
+  chosen by whatever client signed in, which — for a session nobody recognises —
+  is precisely the attacker.
 
 ### `telegram_media_fetch` — `tg-ai media fetch`
 
