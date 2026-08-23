@@ -99,6 +99,10 @@ telegram_ai_cli = ["py.typed"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# `tests/fakes.py` is imported by name. The default import mode happens to put
+# `tests/` on the path anyway; saying so keeps that working under
+# `--import-mode=importlib`, where it does not.
+pythonpath = ["tests"]
 filterwarnings = ["error::DeprecationWarning:telegram_ai_cli.*"]
 
 [tool.ruff]

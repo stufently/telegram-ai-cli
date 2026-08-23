@@ -86,38 +86,29 @@ is
       the row. That is a rollback path with its own failure modes, not a
       condition, which is why it is a backlog item rather than an `if`.
 
-- [ ] **No handler-level tests.** Everything under `ops/` is tested through its
-      pure parts (`_serialize`, `links`, `untrusted`, the policy kernel); no test
-      drives a handler with a fake Telethon client. Raised by review: the cases
-      worth covering that way are policy-checked-before-fetch, a DM refusal, the
-      link/id conflict, and that `chat.read` sends `GetPeerDialogsRequest`
-      specifically rather than anything that acknowledges a message. Needs a
-      small fake-client fixture first. `drafts.list` adds one more: its
-      per-row filter is tested as a pure function (`draft_visibility`), but
-      nothing yet proves the *handler* routes each verdict to the right
-      bucket — a swap of the "hidden" and "withheld" branches would list a
-      private draft and still pass. `tests/test_search_context.py` now drives
-      `handle_search` against a local fake (history in a list, Telethon's
-      `offset_id`/`reverse` paging reproduced), and `tests/test_mentions.py`
-      drives `handle_mentions` against another one that records every request
-      class it is handed — which is how "policy is checked before the fetch" and
-      "no acknowledging request is ever issued" are asserted rather than
-      reviewed. `tests/test_folders.py` adds a third — a fake registry and
-      client driving `handle_chats`, `handle_inbox` and `handle_folders` over
-      real Telethon entities, which is how "a folder cannot admit a chat the
-      policy closes" is asserted. `tests/test_archive.py` is the fourth, and it
-      *was* written from scratch — which is the evidence for the point below.
-      Per-module fakes rather than a shared fixture; promoting one to
-      `conftest.py` is what would let the cases above be written, and would stop
-      a fifth from being written from scratch again.
+- [ ] **The per-module fakes have not been folded into the shared one.**
+      `tests/conftest.py` now carries a fake client, registry and context
+      builder, and `tests/test_handlers.py` uses them for the cases that had no
+      test at all — policy refused before the fetch, a DM refused by the list it
+      is remapped onto, `chat.read` issuing `GetPeerDialogsRequest` and nothing
+      that acknowledges, a link and `before_id` both positioning the page, and
+      `drafts.list` routing shown/hidden/withheld to three different places.
+      The four older fakes (`test_search_context`, `test_mentions`,
+      `test_folders`, `test_archive`) still stand on their own, and folding them
+      in is churn with no behaviour change. Two are worth keeping as they are:
+      `test_search_context` and `test_archive` reproduce paging, which the
+      shared fake deliberately does not. `test_mentions` is already strict about
+      unexpected requests. `test_folders` is the one candidate — its fake
+      answers every request with the same object, which is how a new call slips
+      through a green run.
 
 - [ ] **The `noforwards` classification is not exercised against a live chat.**
       `ChatForwardsRestrictedError` is in the applier's no-effect set and is
       translated into `FORWARDS_RESTRICTED` with a message naming the source chat
-      by id; the test constructs the exception directly, because there is no
-      fixture that drives `apply_plan` against a fake Telethon raising from
-      `forward_messages`. The same missing fixture is the one the handler-level
-      gap above asks for.
+      by id; the test constructs the exception directly, because nothing drives
+      `apply_plan` against a fake Telethon raising from `forward_messages`. The
+      shared fake in `tests/conftest.py` covers the read side; an applier needs
+      a plan store and a limiter beside it, which is the part still missing.
 
 - [ ] **The regex time budget is POSIX- and main-thread-only.** `archive search`
       caps a pattern at 10 seconds with `SIGALRM`, which is the only
