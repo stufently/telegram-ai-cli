@@ -264,3 +264,8 @@ config/tgai.yaml
 
 # Private denylist for test_no_private_data (kept outside the repo by design).
 private-denylist.txt
+
+# Scratch. A throwaway script written to inspect something is not a change, and
+# `git add -A` cannot tell the difference — one reached a commit's index this
+# way, complete with an absolute path from the machine it was written on.
+/tmp/

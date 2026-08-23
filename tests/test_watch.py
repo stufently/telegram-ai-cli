@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from telegram_ai_cli.audit import AuditLog
 from telegram_ai_cli.config import Settings
@@ -506,10 +507,39 @@ def test_an_over_long_wait_is_refused_rather_than_clamped() -> None:
 
 
 def test_a_comma_separated_chat_list_is_accepted_for_the_terminal() -> None:
-    """The CLI generator has no repeated-option form; the model takes the string."""
+    """The form the docs taught, in both shapes it can now arrive in.
+
+    `--chats @a --chats @b` reaches the model as a list, so the comma form now
+    arrives as a one-element list rather than as a bare string — and it has to
+    keep splitting there, or repetition would have broken the older form.
+    """
     assert WatchInput.model_validate({"chats": "-4242, @example"}).chats == ["-4242", "@example"]
+    assert WatchInput.model_validate({"chats": ["-4242, @example"]}).chats == ["-4242", "@example"]
+    assert WatchInput.model_validate({"chats": ["-4242", "@example"]}).chats == [
+        "-4242",
+        "@example",
+    ]
     assert WatchInput.model_validate({"chats": ["-4242"]}).chats == ["-4242"]
     assert WatchInput.model_validate({}).chats is None
+
+
+@pytest.mark.parametrize("given", ["", " ", ",", [], [""], [",", " "]])
+def test_a_chats_value_that_names_nothing_is_refused(given: Any) -> None:
+    """An empty narrowing must not widen.
+
+    `chats=None` means every chat the policy permits, so reading an empty value
+    as an omission would take a scope somebody typed wrong and replace it with
+    the largest one this account allows. The policy still applies either way —
+    this is about honouring what was asked for, not about what is reachable.
+    """
+    with pytest.raises(ValidationError, match="names no chat"):
+        WatchInput.model_validate({"chats": given})
+
+
+def test_omitting_chats_still_means_every_permitted_chat() -> None:
+    """The distinction the refusal above depends on: absent is not empty."""
+    assert WatchInput.model_validate({}).chats is None
+    assert WatchInput.model_validate({"chats": None}).chats is None
 
 
 def test_watching_is_a_read_that_declares_its_capability() -> None:

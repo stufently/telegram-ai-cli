@@ -901,6 +901,28 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Changed
 
+- **List and object arguments have a CLI form.** The generator in `cli.py`
+  derives every option from a Pydantic field, and it mapped `list[int]` to a
+  single `int` and a nested model to a bare string — so `chat restrict`
+  (`restrictions`), `chat promote` (`rights`), `chat create` (`users`),
+  `message forward` and `message delete` (`message_ids`) and `watch` (`chats`)
+  appeared in `--help`, accepted a value, and meant something else by it. A
+  list field is now a repeatable option (`--message-ids 8120 --message-ids
+  8121`) and a nested model takes one JSON object (`--restrictions
+  '{"send_messages": true}'`), with the accepted keys listed in `--help`.
+  Malformed JSON is a usage error naming the shape rather than a validation
+  error about a field the caller did supply; which keys are legal stays
+  Pydantic's to decide, so both surfaces refuse the same input for the same
+  reason. `Annotated[int, …]` fields — how every bounded message id is spelled
+  — are typed as integers instead of falling through to text. `watch --chats`
+  keeps its comma form, in a repeated value as well as alone.
+
+- **`watch` refuses a `chats` value that names nothing.** `""`, `","` and `[]`
+  used to collapse to "no chats given", and omitting `chats` means *every chat
+  the policy permits* — so a narrowing that was typed wrong quietly became the
+  widest scope the account allows. Omission is unaffected: an absent key never
+  reaches the validator.
+
 - `message.reply`, `message.edit` and `message.delete` accept a `t.me` message
   link as `chat`, the way the four message marks already did. A permalink is
   what every Telegram client offers to copy, and it is how a person hands a
@@ -951,6 +973,24 @@ before that, breaking changes can happen on any `0.x` release.
   told what the delimiters mean instead of inferring it.
 
 ### Fixed
+
+- **A numeric peer id from the terminal was resolved as a phone number.** Every
+  `int | str` field in the registry belongs to a write, and the CLI generator
+  collapsed that union to `str` — so `--chat -1001234567890` reached Telethon as
+  text, where `parse_phone` accepts any run of digits and sends the value down
+  the contact-list branch. The usual result was "cannot find any entity" on a
+  chat that plainly exists; the bad one was a write addressed to whichever
+  contact happened to carry those digits as a number. The read path already drew
+  this line inside `resolve_chat_ref`; the writes now draw it one step earlier,
+  in the option itself. `@usernames`, `t.me` links and anything keeping a `+`
+  are untouched.
+
+- **`chat create` rejected its own default.** A field with a `default_factory`
+  reports `PydanticUndefined` as its default rather than the value the factory
+  would build, and the CLI generator forwarded that sentinel as though it were
+  one — so `tg-ai chat create --title X` failed validation on `users`, an
+  argument nobody had passed. Invisible until now because the same command's
+  only list argument could not be passed either.
 
 - **"Muted" was read from the chat alone, so muting a whole category counted
   for nothing.** Telegram keeps three global switches — private chats, groups,

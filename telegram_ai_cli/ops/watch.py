@@ -113,7 +113,8 @@ class WatchInput(ReadInput):
         max_length=MAX_WATCHED_CHATS,
         description=(
             "Chat ids, @usernames or t.me links to watch. Omit to watch every chat "
-            "the policy already permits reading. Accepts a comma-separated string."
+            "the policy already permits reading. A value may also be a comma-separated "
+            "list, which is what the terminal form used to require."
         ),
     )
     timeout_sec: float = Field(
@@ -144,16 +145,38 @@ class WatchInput(ReadInput):
     @field_validator("chats", mode="before")
     @classmethod
     def _accept_a_comma_separated_string(cls, value: Any) -> Any:
-        """The CLI generator has no repeated-option form for a list field.
+        """Split on commas, whether one string arrived or a list of them.
 
-        `cli.py` maps `list[str]` to a single string option (a known gap in
-        `TASKS.md`), so without this the operation would be reachable over MCP
-        and unusable from a terminal. Splitting here keeps both surfaces on the
-        same model instead of teaching one of them a special case.
+        This began as the workaround for a CLI that could not repeat an option,
+        and `--chats @a --chats @b` now works — but the comma form is what the
+        documentation taught and what anyone's shell history holds, so it keeps
+        working. Splitting inside a *list* matters for the same reason: with
+        repetition, `--chats @a,@b` reaches here as one element rather than as
+        one string, and dropping the split there would break the older form
+        precisely by fixing the newer one.
+
+        No chat identifier contains a comma — ids are digits, usernames are
+        word characters, links are URLs — so this cannot cut one in half.
+
+        A value that names nothing at all — ``""``, ``","``, ``[]`` — is
+        **refused** rather than read as an omission. Omitting `chats` means
+        "every chat the policy already permits", so folding an empty value into
+        it turns a narrow scope somebody typed wrong into the widest one this
+        account allows, which is the opposite of what they asked for. Omission
+        is still omission: an absent key never reaches a `before` validator.
         """
+        if value is None:
+            return None
         if isinstance(value, str):
-            parts = [part.strip() for part in value.split(",") if part.strip()]
-            return parts or None
+            value = [value]
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            parts = [part.strip() for item in value for part in item.split(",") if part.strip()]
+            if not parts:
+                raise ValueError(
+                    "chats was given but names no chat; omit it to watch every "
+                    "chat the policy permits"
+                )
+            return parts
         return value
 
 

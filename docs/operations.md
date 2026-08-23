@@ -536,7 +536,7 @@ active. Marks nothing as read.
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `account` | string | — | Which account to use |
-| `chats` | list of strings, ≤ 20 | — | Chat ids, `@usernames` or `t.me` links to watch. Omit to watch every chat the policy permits. A comma-separated string is accepted, for the terminal |
+| `chats` | list of strings, ≤ 20 | — | Chat ids, `@usernames` or `t.me` links to watch. Omit to watch every chat the policy permits. From a terminal, repeat `--chats`; a comma-separated value is also accepted, in a list or on its own. A value that names nothing (`""`, `","`, `[]`) is refused rather than read as an omission — an empty narrowing must not silently become the widest scope |
 | `timeout_sec` | float 0 < x ≤ 300 | `60` | Longest this call may block |
 | `debounce_sec` | float 0–30 | `2` | How long the chat must stay quiet before the burst is handed back. Each new message restarts the window; `0` returns the first message alone |
 | `limit` | int 1–500 | `50` | Most messages to collect before returning even if the chat is still busy |
@@ -1232,14 +1232,31 @@ Notes that are not obvious from the table:
 - **`chat.demote` only works on admins this account promoted.** That is
   Telegram's rule, not this project's, and it is stated in the plan summary so
   the refusal is not a surprise at apply time.
-- **Arguments that are lists or objects cannot be expressed by the generated
-  CLI yet.** Click options are derived from the input model, and the generator
-  maps a list to a single value and a nested object to a string — so
-  `message.delete`, `message.forward` (`message_ids`), `chat.create` (`users`),
-  `chat.promote` (`rights`) and `chat.restrict` (`restrictions`) can be
-  *planned* only through their MCP tools
-  today, though the resulting plan is applied from the terminal like any other.
-  Tracked in [`TASKS.md`](../TASKS.md).
+- **A list argument is a repeated flag; an object argument is JSON.** Click
+  options are derived from the input model, so a `list[...]` field becomes a
+  repeatable option and a nested model becomes one JSON object:
+
+  ```bash
+  tg-ai message forward --source-chat @a --destination-chat @b \
+      --message-ids 8120 --message-ids 8121
+  tg-ai chat restrict --chat @group --user @sam \
+      --restrictions '{"send_messages": true, "embed_links": true}'
+  ```
+
+  `--help` lists the keys each object accepts. Which of them are valid, and the
+  rules between them, stay Pydantic's to enforce, so the terminal and the MCP
+  tool refuse the same input for the same reason. Malformed JSON is a usage
+  error naming the shape, not a validation error about a field you did supply.
+  Affected: `message.delete` and `message.forward` (`message_ids`),
+  `chat.create` (`users`), `watch` (`chats`), `chat.promote` (`rights`) and
+  `chat.restrict` (`restrictions`).
+- **A numeric peer is an id, not a phone number.** `--chat`, `--user` and
+  `--users` accept an id, an `@username` or a `t.me` link, and a value that is
+  all digits (with an optional leading `-`) is read as the id. It has to be:
+  handed to Telethon as text, a run of digits is a *phone number* lookup
+  against the account's contacts, which normally fails and occasionally
+  succeeds against the wrong person. A username cannot be all digits and a
+  phone number keeps its `+`, so nothing else is affected.
 - **`message.schedule` needs a time with an offset.** `at` is ISO-8601 and must
   carry an explicit UTC offset (`2026-09-01T09:00:00+07:00`); a naive time is refused
   rather than read as the host's local zone, because a summary that says "09:00"

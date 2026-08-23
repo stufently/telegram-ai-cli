@@ -446,20 +446,31 @@ is
 
 ## Known gaps in the CLI surface
 
-- [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in
-      `cli.py` maps a `list[int]` to a single `int` (no `multiple=True`) and a
-      nested model to a string, so `message forward` (`message_ids`), `chat
-      create` (`users`), `chat promote` (`rights`) and `chat restrict`
-      (`restrictions`) cannot be planned from the terminal at all — only through
-      their MCP tools. `message delete` is now the exception, and only halfway:
-      since a `t.me` link may name the message, `tg-ai message delete --chat
-      https://t.me/example/412` works, while deleting a *run* of messages still
-      needs an MCP client. Either teach the generator repeated
-      options and a JSON form, or say so in `--help` rather than only in
-      `docs/operations.md`. The moderation operations make this sharper: `chat
-      ban`, `chat unban`, `chat kick` and `chat demote` *are* usable from a
-      terminal, so `chat restrict` is now the one moderation action a person
-      cannot plan without an MCP client.
+- [ ] **An object argument is JSON, and JSON in a shell is a quoting problem.**
+      `--restrictions '{"send_messages": true}'` is now expressible, which is
+      the gap that mattered, but it is not what a person would choose to type:
+      both objects in the registry (`AdminRights`, `Restrictions`) are flat sets
+      of booleans, and `--restrict send-messages --restrict embed-links` would
+      say the same thing with no quoting and a `click.Choice` that lists the
+      valid names. It was not built because it only works for all-boolean flat
+      models — a nested model with a string or an int in it needs the JSON path
+      anyway — and one option that means two different things depending on the
+      model behind it is worse than one that always means JSON. Worth revisiting
+      if a third such model appears, or if the quoting turns out to be the first
+      thing every user gets wrong. A `list[SomeModel]` field would also want an
+      answer here: the element type is resolved with `_click_type`, which knows
+      nothing about nested models, so such a field would silently take strings.
+      The registry has none today (raised by review, 2026-08-23).
+- [ ] **`resolve_peer` still reads a numeric string as a phone number.** The CLI
+      no longer hands it one — `--chat 4242` is converted to an int in the
+      option — but the coercion now lives in two places, `ops/chats.py`
+      (`resolve_chat_ref`, for reads) and `cli.py` (`_IntOrText`, for writes),
+      and neither covers a caller that reaches `resolve_peer` directly with a
+      numeric string. Today only MCP can, and its schema says `int | str`, so a
+      client sending `"4242"` is off-spec rather than wrong. The tidy answer is
+      one coercion inside `resolve_peer` and none at the edges; it was not done
+      in the same change because it alters resolution semantics for both
+      surfaces at once, which wants its own review.
 - [ ] **`login_and_register` writes the account row before it takes the session
       lock** (`accounts/login.py`), so a login that then fails on
       `SessionLocked` has already changed `phone`, `source`, `session_path` and

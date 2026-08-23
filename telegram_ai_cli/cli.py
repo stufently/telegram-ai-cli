@@ -21,6 +21,7 @@ from typing import Any, get_args, get_origin
 
 import click
 from pydantic import BaseModel
+from pydantic_core import PydanticUndefined
 
 from . import __version__, dispatch
 from .context import OperationContext
@@ -37,18 +38,107 @@ from .render import sanitize, sanitize_line
 _SIMPLE_TYPES: dict[Any, Any] = {str: str, int: int, float: float, bool: bool}
 
 
+class _IntOrText(click.ParamType):
+    """A peer: an id, an ``@username`` or a ``t.me`` link.
+
+    ``--chat 4242`` has to reach Telethon as the *integer* 4242. Handed over as
+    text it is not an id at all: ``parse_phone`` accepts any run of digits, so
+    the string takes the phone branch of ``_get_entity_from_string``, which
+    walks the account's contact list looking for that number. Usually that ends
+    in "cannot find any entity" — and occasionally, if the digits do match a
+    contact, in a write addressed to the wrong person.
+
+    The read path already draws this line, in `ops/chats.py:resolve_chat_ref`;
+    every `int | str` field in the registry belongs to a *write*, whose
+    `resolve_peer` hands the value straight to Telethon. Same rule, applied one
+    step earlier so both surfaces agree. A username cannot be all digits and a
+    phone number keeps its ``+``, so nothing else is caught by it.
+    """
+
+    name = "id|name"
+
+    def convert(self, value: Any, param: click.Parameter | None, ctx: click.Context | None) -> Any:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        digits = text[1:] if text.startswith("-") else text
+        return int(text) if digits.isdigit() else value
+
+
+_INT_OR_TEXT = _IntOrText()
+
+
 def _click_type(annotation: Any) -> Any:
     """Best-effort mapping. Anything exotic arrives as text and is validated
     by Pydantic afterwards, which is the component that actually knows the
     rules — Click only has to get the value off the command line."""
     if annotation in _SIMPLE_TYPES:
         return _SIMPLE_TYPES[annotation]
+    if getattr(annotation, "__metadata__", None) is not None:  # Annotated[T, ...]
+        # The constraints are Pydantic's to enforce; what Click needs is `T`,
+        # which is the difference between `--message-ids 5` arriving as an int
+        # and arriving as the string every Annotated field used to become.
+        return _click_type(annotation.__origin__)
     origin = get_origin(annotation)
     if origin is not None:
         args = [a for a in get_args(annotation) if a is not type(None)]
         if len(args) == 1:
             return _click_type(args[0])
+        if set(args) == {int, str}:
+            return _INT_OR_TEXT
     return str
+
+
+def _without_none(annotation: Any) -> Any:
+    """``X | None`` → ``X``; everything else unchanged.
+
+    Only the optionality is stripped. ``list[int]`` keeps its list, which the
+    old single-argument unwrap did not — that is how a repeatable field came
+    out of the generator looking like a scalar.
+    """
+    args = get_args(annotation)
+    if type(None) in args and len(rest := [a for a in args if a is not type(None)]) == 1:
+        return rest[0]
+    return annotation
+
+
+class _JsonObject(click.ParamType):
+    """A nested model, typed as JSON on the command line.
+
+    Click's job stops at "get a mapping off the argv"; which keys are allowed
+    and what they mean is Pydantic's, and routing the field errors through it
+    keeps the terminal and the MCP tool refusing the same input for the same
+    reason. What Click does add is the key list in ``--help``: an object
+    argument whose fields are only documented elsewhere is an argument nobody
+    can type.
+    """
+
+    name = "json"
+
+    def __init__(self, model: type[BaseModel]) -> None:
+        self.model = model
+
+    def convert(self, value: Any, param: click.Parameter | None, ctx: click.Context | None) -> Any:
+        if isinstance(value, dict):  # a default, already in the right shape
+            return value
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            self.fail(
+                f"not valid JSON ({exc.msg}); expected an object like {self.example()}",
+                param,
+                ctx,
+            )
+        if not isinstance(parsed, dict):
+            self.fail(f"expected a JSON object like {self.example()}", param, ctx)
+        return parsed
+
+    def example(self) -> str:
+        first = next(iter(self.model.model_fields), "key")
+        return json.dumps({first: True})
+
+    def keys(self) -> str:
+        return ", ".join(self.model.model_fields)
 
 
 def _options_for(model: type[BaseModel]) -> list[click.Option]:
@@ -58,13 +148,40 @@ def _options_for(model: type[BaseModel]) -> list[click.Option]:
         annotation = field.annotation
         is_bool = annotation is bool
         required = field.is_required()
+        inner = _without_none(annotation)
+        help_text = field.description or ""
+
+        multiple = get_origin(inner) in (list, set, tuple)
+        param_type: Any
+        if multiple:
+            param_type = _click_type(get_args(inner)[0])
+            help_text = (help_text + " Repeat the flag for each value.").strip()
+        elif isinstance(inner, type) and issubclass(inner, BaseModel):
+            json_type = _JsonObject(inner)
+            param_type = json_type
+            help_text = (
+                f"{help_text} JSON object; keys: {json_type.keys()}. "
+                f"Example: --{name.replace('_', '-')} '{json_type.example()}'"
+            ).strip()
+        else:
+            param_type = None if is_bool else _click_type(annotation)
+
+        # A field with a `default_factory` reports `PydanticUndefined` here,
+        # and forwarding that sentinel as a value made the model reject its own
+        # default. None is dropped before the model is built, which is the same
+        # thing the factory would have produced.
+        default = field.default
+        if required or default is PydanticUndefined:
+            default = None
+
         options.append(
             click.Option(
                 [f"{flag}/--no-" + name.replace("_", "-")] if is_bool else [flag],
                 required=required,
-                default=None if required else field.default,
-                help=field.description or "",
-                type=None if is_bool else _click_type(annotation),
+                default=default,
+                multiple=multiple,
+                help=help_text,
+                type=param_type,
             )
         )
     return options
@@ -119,8 +236,17 @@ def _emit(envelope: Envelope, *, as_json: bool) -> None:
 def _run_operation(op: Operation, ctx_obj: dict[str, Any], **kwargs: Any) -> None:
     as_json = ctx_obj["json"]
     # Click hands back None for every option the user did not pass; forwarding
-    # those would override the model's own defaults with null.
-    raw = {k: v for k, v in kwargs.items() if v is not None}
+    # those would override the model's own defaults with null. A repeatable
+    # option is the same case wearing a different shape — an empty tuple, not
+    # None — and forwarding *that* is what would turn "omit message_ids and let
+    # the link name the message" into "delete an empty list of messages".
+    raw: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        if isinstance(value, tuple):  # only a repeatable option produces one
+            if value:
+                raw[key] = list(value)
+        elif value is not None:
+            raw[key] = value
 
     # Shared with the MCP server: parsing, the context, and the choice between
     # running here and running on the account's daemon all live in `dispatch`,
