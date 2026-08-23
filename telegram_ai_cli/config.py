@@ -21,7 +21,7 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 DEFAULT_CONFIG_PATH = Path(
     os.environ.get("TGAI_CONFIG", Path.home() / ".config" / "telegram-ai-cli" / "tgai.yaml")
@@ -175,6 +175,28 @@ class Settings(BaseSettings):
     #: resend a message we decided not to resend. We drive retries ourselves.
     telethon_flood_sleep_threshold: int = 0
     telethon_request_retries: int = 1
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Environment first, then the YAML file, then the defaults.
+
+        ``load_settings`` hands the YAML in as init keyword arguments, and
+        pydantic-settings ranks those *above* the environment by default — so
+        without this reordering ``TGAI_PROFILE`` could not override a `profile:`
+        line in the file, which is the opposite of what this project documents.
+
+        The direction that matters is not the widening one. It is that an
+        operator (or a container) must be able to *narrow* what the file grants:
+        ``TGAI_PROFILE=readonly`` has to win over ``profile: plan`` on disk.
+        """
+        return (env_settings, dotenv_settings, init_settings, file_secret_settings)
 
 
 def load_settings(path: Path | None = None) -> Settings:
