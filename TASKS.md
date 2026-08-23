@@ -160,6 +160,15 @@ is
       refusal only shows up at apply time. Fetching the ceiling at plan time
       would let the summary say "this chat allows one reaction, so it will
       replace" with certainty rather than in the conditional.
+- [ ] **A plan's message snapshot cannot see a swapped attachment.**
+      `write.message_snapshot` records the digest of the message *body*, which
+      is empty for every photo posted without a caption — so editing a media
+      message to carry a different photo leaves the snapshot identical and
+      `apply._check_messages` passes. `ops/marks.media_fingerprint` closes it for
+      reactions and pins by recording the attachment's type and id in their own
+      preconditions; `message.forward` and `message.delete` still have the gap,
+      and the fix belongs in the shared snapshot rather than in a third copy.
+      (Raised by review, 2026-08-23.)
 - [ ] **Which reactions a chat permits is never checked.** A chat can restrict
       reactions to a named set, and a custom emoji reaction is a paid feature the
       account may not have. Both surface as an apply-time refusal

@@ -1266,6 +1266,11 @@ chat.
   one-sided, and frequently undoes *somebody else's* pin; the preview says whose
   message it is in both directions. Already pinned, or not pinned at all, is
   refused rather than planned.
+- **A caption-less attachment is identified in the plan.** The shared message
+  snapshot digests the body, which is empty for a photo posted without a
+  caption; these four record the attachment's type and id as well, name them in
+  the preview, and refuse at apply time if the message was edited to carry
+  something else.
 - **These four act on messages this account did not write, deliberately.**
   `message.edit` and `message.delete` refuse another person's message; a
   reaction is for other people's messages and pinning one is the point of

@@ -68,6 +68,18 @@ before that, breaking changes can happen on any `0.x` release.
   there, removing one this account never left, pinning what is already pinned,
   unpinning what is not pinned — each is refused while the plan is written. A
   plan still costs a person the reading of it.
+  **A caption-less attachment is identified, not just counted.** The shared
+  message snapshot digests the *body*, which is empty for every photo posted
+  without a caption — so an edit that swaps the picture leaves it unchanged, and
+  these four are exactly the operations that act on messages somebody else can
+  still edit. The plan records the attachment's type and id, quotes them in the
+  preview, and the applier refuses if they moved.
+  **The refusals these two calls have of their own are treated as refusals**:
+  `REACTION_INVALID`, `REACTIONS_TOO_MANY`, `PREMIUM_ACCOUNT_REQUIRED`,
+  `CHAT_NOT_MODIFIED`, `PIN_RESTRICTED` and their neighbours join the whitelist
+  of errors that prove nothing happened, so they give the rate-limit slot back
+  instead of landing in `unknown_outcome` and sending somebody to look at a chat
+  where nothing occurred.
   **They take a `t.me` link.** `chat` accepts a permalink and takes the message
   number from it, through the same parser and the same two guards the reads use
   (`links.parse_telegram_link`, `chats.guard_message_link`), so a link into a

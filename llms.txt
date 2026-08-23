@@ -44,8 +44,9 @@
   vulnerability reporting (GitHub Security Advisories, not email), scope, and
   the design rationale behind each safety control.
 - [docs/operations.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/operations.md):
-  every operation on both surfaces — the nine read tools, the twelve plan
-  tools, the plan lifecycle commands and the two terminal-only account
+  every operation on both surfaces — the read tools, the plan tools (which
+  now include reactions and pins), the plan lifecycle commands and the two
+  terminal-only account
   commands — with arguments, defaults and the policy each one consults, plus
   the shared message shape and the trust boundary in tool output.
 - [docs/configuration.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/configuration.md):

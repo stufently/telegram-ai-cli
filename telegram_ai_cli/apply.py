@@ -88,6 +88,14 @@ _LIMIT_KINDS: dict[str, LimitKind] = {
     # Marking read is visible to the other party, so it draws on the same
     # budget as speaking rather than being free.
     "chat.mark_read": LimitKind.SEND,
+    # A reaction is speech: it appears under somebody's message and notifies
+    # them. Same budget as a message, for the same reason.
+    "message.react": LimitKind.SEND,
+    "message.unreact": LimitKind.SEND,
+    # Pinning changes what every member of the chat sees at the top of their
+    # window, which is an administrative act rather than a remark.
+    "message.pin": LimitKind.ADMIN,
+    "message.unpin": LimitKind.ADMIN,
     "chat.join": LimitKind.JOIN,
     "chat.leave": LimitKind.JOIN,
     "chat.create": LimitKind.ADMIN,
@@ -132,6 +140,13 @@ class _Prepared:
     audit_peer_id: int | None = None
     audit_body: str | None = None
     warnings: list[str] = field(default_factory=list)
+    #: The account's complete reaction list for the message afterwards, worked
+    #: out during verification. Telegram's reaction call takes the whole list
+    #: rather than a delta, and computing it after the audit record is written
+    #: would put a refusable input error on the far side of the "the request may
+    #: already have left" line. ``None`` means "not a reaction operation";
+    #: ``[]`` means "remove them all", and the two are not the same thing.
+    reactions: list[dict[str, Any]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +188,21 @@ def _no_effect_error_classes() -> tuple[type[BaseException], ...]:
         # The request never described anything Telegram could act on, so there
         # was nothing for it to change.
         "MessageIdInvalidError",
+        "MsgIdInvalidError",
         "MessageNotModifiedError",
+        # Reacting and pinning add their own refusals. Each is Telegram saying
+        # "no" to the request: the reaction is not one this chat permits, the
+        # account cannot pay for a star reaction, too many were sent, the pin
+        # state is already what was asked for, or pinning is not allowed here.
+        # Without them any of these lands in `unknown_outcome`, which spends the
+        # budget and asks a person to go and look at a chat nothing happened in.
+        "ReactionInvalidError",
+        "ReactionsTooManyError",
+        "PremiumAccountRequiredError",
+        "DocumentInvalidError",
+        "ChatNotModifiedError",
+        "PinRestrictedError",
+        "BotOnesideNotAvailError",
         "MessageEmptyError",
         "MessageTooLongError",
         "PeerIdInvalidError",
@@ -428,6 +457,9 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 warnings=warnings,
             )
 
+        case "message.react" | "message.unreact" | "message.pin" | "message.unpin":
+            return await _verify_mark(ctx, client, plan, params, warnings)
+
         case "message.forward":
             require_planning_profile(ctx, Capability.SEND, action=action)
             source = await resolve_peer(client, params.source_chat)  # type: ignore[attr-defined]
@@ -541,6 +573,126 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
     raise InvalidInput(f"no applier for operation {sanitize_line(operation, limit=64)}")
 
 
+async def _verify_mark(
+    ctx: OperationContext,
+    client: Any,
+    plan: Plan,
+    params: BaseModel,
+    warnings: list[str],
+) -> _Prepared:
+    """Re-check a reaction or a pin against the world as it is now.
+
+    Split out of :func:`_verify` because the four share every step, and because
+    two of those steps have nothing to do with the peer or the message text:
+
+    **The reactions this account had are compared.** Telegram's reaction call
+    takes the account's complete list for a message, never a delta. A plan that
+    said "add 🎉 alongside 👍" and is applied after 👍 was dropped from another
+    device would silently send a list nobody reviewed — so a change in what this
+    account had reacted with is a failed precondition, not a detail.
+
+    **The pinned state is compared.** "Pin this" applied to something already
+    pinned re-notifies the whole chat for nothing; "unpin this" applied to
+    something already unpinned is an act on a state that no longer exists.
+
+    The final reaction list is computed *here*, before the rate-limit slot and
+    the audit record. An input error raised after those would land on the wrong
+    side of the line where a request may already have left.
+    """
+    from .ops.marks import (
+        chosen_reactions,
+        final_reactions,
+        media_fingerprint,
+        remaining_reactions,
+        resolve_message,
+        same_reactions,
+    )
+    from .ops.write import require_planning_profile
+
+    operation = plan.operation
+    action = f"apply:{operation}"
+    pre = plan.preconditions
+    reacting = operation in {"message.react", "message.unreact"}
+    capability = Capability.SEND if reacting else Capability.ADMIN
+
+    require_planning_profile(ctx, capability, action=action)
+    chat, message = await resolve_message(
+        ctx,
+        client,
+        chat=params.chat,  # type: ignore[attr-defined]
+        message_id=params.message_id,  # type: ignore[attr-defined]
+        capability=capability,
+        action=action,
+    )
+    warnings += _check_peer(pre["peer"], chat, what="chat")
+    _check_messages([pre["message"]], [message])
+    # The shared snapshot digests the *body*, which is empty for every
+    # caption-less photo. These four act on other people's messages, where an
+    # edit can swap the attachment and leave that digest untouched.
+    if media_fingerprint(message) != pre.get("media"):
+        raise PlanPreconditionFailed(
+            f"the attachment on message {message.id} is not the one the plan was "
+            "reviewed against; the message was edited since",
+            suggestion="Reject this plan and create a new one against the current message.",
+        )
+
+    reactions: list[dict[str, Any]] | None = None
+    if reacting:
+        existing = chosen_reactions(message)
+        if not same_reactions(existing, pre["existing"]):
+            raise PlanPreconditionFailed(
+                "this account's reactions on that message have changed since the plan "
+                "was reviewed; the reaction call replaces the whole list, so applying "
+                "it now would discard something nobody looked at",
+                suggestion="Reject this plan and create a new one against the current state.",
+            )
+        wanted = _requested_reaction(params)
+        try:
+            if operation == "message.unreact":
+                reactions = remaining_reactions(existing, wanted)
+            elif wanted is None:  # pragma: no cover - the input model forbids it
+                raise PlanPreconditionFailed("the plan names no reaction to add")
+            else:
+                reactions = final_reactions(
+                    existing,
+                    wanted,
+                    keep_existing=params.keep_existing,  # type: ignore[attr-defined]
+                )
+        except InvalidInput as exc:
+            # Reached only where the world moved in a way the comparison above
+            # did not catch. Reported as a precondition failure rather than an
+            # input error, so the plan is closed cleanly instead of surfacing as
+            # a traceback from the verification path.
+            raise PlanPreconditionFailed(exc.message) from exc
+    else:
+        expected_pinned = bool(pre["pinned"])
+        if bool(getattr(message, "pinned", False)) != expected_pinned:
+            state = "already pinned" if operation == "message.pin" else "no longer pinned"
+            raise PlanPreconditionFailed(
+                f"message {message.id} is {state}; the plan was written against the opposite state"
+            )
+
+    return _Prepared(
+        limit_target=str(chat.ref.peer_id),
+        peers={"chat": chat},
+        messages=[message],
+        audit_peer_id=chat.ref.peer_id,
+        warnings=warnings,
+        reactions=reactions,
+    )
+
+
+def _requested_reaction(params: BaseModel) -> dict[str, Any] | None:
+    """The reaction named in a plan's params, or ``None`` for "all of them"."""
+    from .ops.marks import requested_reaction
+
+    emoji = getattr(params, "emoji", None)
+    custom = getattr(params, "custom_emoji_id", None)
+    if emoji is None and custom is None:
+        return None
+    return requested_reaction(emoji=emoji, custom_emoji_id=custom)
+
+
 # ---------------------------------------------------------------------------
 # the RPCs
 # ---------------------------------------------------------------------------
@@ -638,6 +790,54 @@ async def _execute(
             else:
                 await client(functions.messages.ReadHistoryRequest(peer=peer, max_id=max_id))
             return {"marked_read_up_to": max_id or "latest"}, warnings
+
+        case "message.react" | "message.unreact":
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            message = prepared.messages[0]
+            wanted = list(prepared.reactions or [])
+            await client(
+                functions.messages.SendReactionRequest(
+                    peer=peer,
+                    msg_id=int(message.id),
+                    # The account's whole list, because that is what Telegram's
+                    # call means. An empty one takes every reaction off.
+                    reaction=[_reaction_object(one) for one in wanted],
+                    big=bool(getattr(params, "big", False)),
+                    # Off deliberately. Adding to the owner's "recently used"
+                    # row reorders a control on their own phone, which is an
+                    # invisible side effect of an action they approved for a
+                    # different reason.
+                    add_to_recent=False,
+                )
+            )
+            return {
+                "message_id": int(message.id),
+                "reactions": wanted,
+            }, warnings
+
+        case "message.pin" | "message.unpin":
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            message = prepared.messages[0]
+            unpin = operation == "message.unpin"
+            private = prepared.peers["chat"].ref.is_private
+            # `pm_oneside` exists only for one-to-one chats, where it means
+            # "leave the other person's window alone". Pinning defaults to that;
+            # unpinning never uses it, because a pin removed on one side only is
+            # a banner still sitting at the top of somebody else's chat, which is
+            # not what the plan said would happen.
+            oneside = private and not unpin and not bool(getattr(params, "both_sides", False))
+            await client(
+                functions.messages.UpdatePinnedMessageRequest(
+                    peer=peer,
+                    id=int(message.id),
+                    # Telegram never announces an unpin, so the flag is only
+                    # meaningful on the way in.
+                    silent=bool(getattr(params, "silent", False)) or unpin,
+                    unpin=unpin,
+                    pm_oneside=oneside,
+                )
+            )
+            return {"message_id": int(message.id), "pinned": not unpin}, warnings
 
         case "chat.join":
             target = prepared.peers["chat"]
@@ -976,6 +1176,27 @@ async def _member_peers(client: Any, prepared: _Prepared) -> tuple[Any, Any]:
     chat_peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
     user_peer = await client.get_input_entity(prepared.peers["user"].ref.peer_id)
     return chat_peer, user_peer
+
+
+def _reaction_object(reaction: dict[str, Any]) -> Any:
+    """Turn this project's reaction shape back into Telethon's.
+
+    The two forms are kept apart on purpose. A plan stores something a person
+    can read in ``plan show`` and something the applier can compare for drift; a
+    Telethon constructor is neither. The custom-emoji id travels as a string all
+    the way to here for the same reason it is published as one — it is 64-bit,
+    and anything that round-trips it through a float loses the identifier.
+    """
+    from telethon.tl import types
+
+    if reaction.get("kind") == "custom_emoji":
+        return types.ReactionCustomEmoji(document_id=int(reaction["custom_emoji_id"]))
+    if reaction.get("kind") != "emoji" or not reaction.get("emoji"):
+        # Unreachable: `marks.guard_sendable` refuses such a list while the plan
+        # is written and again during verification. Kept because the alternative
+        # is constructing a `ReactionEmoji(emoticon="None")` and sending it.
+        raise InvalidInput(f"cannot send a reaction of kind {reaction.get('kind')!r}")
+    return types.ReactionEmoji(emoticon=str(reaction["emoji"]))
 
 
 def _missing_invitees(result: Any) -> list[int]:
