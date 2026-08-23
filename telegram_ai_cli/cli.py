@@ -152,6 +152,11 @@ def _build_command(op: Operation) -> click.Command:
             "\n\nPrepares a plan and prints its id. Nothing is sent until you run "
             "`tg-ai plan apply <id>`."
         )
+    elif op.effect is Effect.LOCAL_ADMIN:
+        help_text += (
+            "\n\nA terminal-only command: it may prompt, and it is deliberately absent "
+            "from the MCP tool surface."
+        )
     return click.Command(
         name=op.cli[-1],
         callback=callback,

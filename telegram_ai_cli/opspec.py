@@ -45,6 +45,11 @@ class Effect(StrEnum):
     #: Writes to this machine only (downloading media). Runs immediately, but
     #: never at a caller-chosen path — see the media operation for why.
     LOCAL_WRITE = auto()
+    #: Administers this installation's own account inventory: registering an
+    #: account, signing one in. Terminal only — never published as an MCP tool,
+    #: because it prompts a person for a login code and because the ability to
+    #: enrol an account is the ability to widen everything else.
+    LOCAL_ADMIN = auto()
     #: Changes something on Telegram. Never runs from a tool call: it is
     #: planned, and applied by a person running the CLI.
     REMOTE_WRITE = auto()
@@ -69,7 +74,11 @@ class Operation:
     description: str = ""
 
     mcp_tool: str | None = None
-    """Tool name for READ and LOCAL_WRITE. Must be ``None`` for REMOTE_WRITE."""
+    """Tool name for READ and LOCAL_WRITE.
+
+    Must be ``None`` for REMOTE_WRITE (planned over MCP, applied in a terminal)
+    and for LOCAL_ADMIN (terminal only, never reachable from a tool call).
+    """
 
     plan_tool: str | None = None
     """Tool name that *prepares* a REMOTE_WRITE, e.g. ``telegram_plan_send_message``."""
@@ -203,6 +212,13 @@ class Registry:
                     raise ValueError(f"{op.name}: reads need a handler")
                 if op.plan_tool is not None:
                     raise ValueError(f"{op.name}: only remote writes may have a plan tool")
+                if op.effect is Effect.LOCAL_ADMIN and op.mcp_tool is not None:
+                    raise ValueError(
+                        f"{op.name}: account administration must not be published as an MCP "
+                        "tool. Enrolling or signing in an account is done by a person at a "
+                        "terminal; a tool for it would let a caller widen the fleet the rest "
+                        "of the policy is written against."
+                    )
 
         # The single most important property in the project, checked as a
         # property rather than trusted as a convention: no tool applies a plan.

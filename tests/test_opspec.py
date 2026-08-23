@@ -63,6 +63,23 @@ def write_op(**overrides) -> Operation:
     return Operation(**{**defaults, **overrides})
 
 
+class LabelInput(BaseModel):
+    label: str
+
+
+def admin_op(**overrides) -> Operation:
+    defaults = {
+        "name": "account.login",
+        "cli": ("account", "login"),
+        "summary": "Sign an account in",
+        "input_model": LabelInput,
+        "effect": Effect.LOCAL_ADMIN,
+        "capability": None,
+        "handler": handler,
+    }
+    return Operation(**{**defaults, **overrides})
+
+
 def registry_of(*ops: Operation) -> Registry:
     registry = Registry()
     for op in ops:
@@ -205,6 +222,24 @@ def test_the_ban_on_apply_covers_read_tools_too() -> None:
     registry = registry_of(read_op(mcp_tool="telegram_apply_something"))
     with pytest.raises(ValueError, match="no MCP tool may apply a plan"):
         registry.check_invariants()
+
+
+def test_account_administration_may_not_be_published_as_a_tool() -> None:
+    """Enrolling or signing in an account is a terminal action, not a tool call.
+
+    It prompts a human for the code Telegram just sent, and it widens the very
+    fleet the rest of the policy is written against — a caller able to add an
+    account can add one whose chats no allowlist was ever written for.
+    """
+    registry = registry_of(admin_op(mcp_tool="telegram_account_login"))
+    with pytest.raises(ValueError, match="must not be published as an MCP tool"):
+        registry.check_invariants()
+
+
+def test_account_administration_is_well_formed_without_any_tool() -> None:
+    registry = registry_of(admin_op())
+    assert registry.check_invariants() is None
+    assert registry.mcp_tool_names() == ()
 
 
 def test_the_process_wide_registry_is_consistent() -> None:

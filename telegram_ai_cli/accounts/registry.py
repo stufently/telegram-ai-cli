@@ -150,7 +150,7 @@ class AccountRegistry:
         if record.status is AccountStatus.REVOKED:
             raise SessionRevoked(
                 f"account {record.label!r} was revoked by Telegram",
-                suggestion=f"Re-authorise it with `tg-ai account login {record.label}`.",
+                suggestion=f"Re-authorise it with `tg-ai account login --label {record.label}`.",
             )
 
         spec = AccountSpec.from_record(record, self.store)
@@ -189,6 +189,45 @@ class AccountRegistry:
         self.store.set_status(spec.label, status, redact_secrets(message, *spec.secrets()))
 
     # -- importing ---------------------------------------------------------
+
+    def register_phone_login(
+        self,
+        label: str,
+        *,
+        phone: str | None = None,
+        api_id: int | None = None,
+        api_hash: str | None = None,
+        proxy_url: str | None = None,
+        replace: bool = False,
+    ) -> AccountView:
+        """Register an account that a phone login will authorise later.
+
+        Nothing is imported and nothing connects: the row points at the
+        ``.session`` the login will create. It still runs under the account's
+        session lock, like every other change that can replace a row — writing
+        over one while a client is connected underneath it is how a session
+        file ends up corrupted by its own reader.
+        """
+        name = self._claim_label(label, replace=replace)
+        paths = self.paths_for(name).prepare()
+        proxy_url = validate_proxy_url(proxy_url)
+
+        with self._offline(name):
+            self.store.upsert(
+                name,
+                AccountSource.SESSION_FILE,
+                session_path=str(paths.session_file),
+                phone=phone,
+                api_id=api_id,
+                api_hash=api_hash,
+                proxy_url=proxy_url,
+                # replace=replace, not True: _claim_label has already refused a
+                # duplicate, and re-checking inside the transaction closes the gap
+                # between that check and this write.
+                replace=replace,
+            )
+        log.info("registered account %s for phone login", name)
+        return self.require(name)
 
     def import_tdata(
         self,

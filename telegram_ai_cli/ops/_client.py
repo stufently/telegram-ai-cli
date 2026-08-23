@@ -174,7 +174,7 @@ async def open_account(ctx: OperationContext, label: str | None) -> AsyncIterato
         if not await client.is_user_authorized():
             raise AuthRequired(
                 f"account {resolved!r} is not signed in",
-                suggestion=f"Run `tg-ai account login {resolved}`.",
+                suggestion=f"Run `tg-ai account login --label {resolved}`.",
             )
 
         yield OpenAccount(label=resolved, client=client, spec=spec)
