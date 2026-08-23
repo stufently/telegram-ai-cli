@@ -229,7 +229,7 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
 
 ## MCP tools
 
-Forty-five tools: twenty that run immediately, and twenty-five plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
+Fifty tools: twenty that run immediately, and thirty plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
 telegram_fleet             telegram_plan_send_message     telegram_plan_join_chat
@@ -252,6 +252,11 @@ telegram_archive_sync
 telegram_archive_search
 telegram_archive_status
 telegram_archive_forget
+telegram_plan_block_user
+telegram_plan_unblock_user
+telegram_plan_set_chat_title
+telegram_plan_set_chat_about
+telegram_plan_set_chat_photo
 ```
 
 The four `telegram_archive_*` tools are the way out of paying an RPC for every question. `archive_sync` copies **one named chat** — there is no daemon, no background sweep and no "archive everything" — into a SQLite file on your own disk, resuming from a stored watermark so a second run fetches only what is new. `archive_search` then answers offline, which is what makes **regular expressions** possible at all: Telegram's own search matches text, not patterns. Two properties keep that honest. The read allowlist is re-applied **on the read**, not remembered from the write, so a chat archived yesterday and closed today stops answering and is counted as withheld rather than quietly missing. And every archive answer carries `meta.source: archive` plus the timestamp of the oldest sync it covers — an archive result mistaken for a live one is stale state reported as current. The file is `0600`, gitignored, and **not encrypted**: the `.session` file next to it already grants full live access to the account, so encryption would not raise the bar while it would make offline search impossible. Recognisable secrets are masked *before* they are written, and `archive_forget` erases a chat — including one the policy has since closed, because "you may not read it and you may not delete it" is the worst of both answers. See [`docs/operations.md`](docs/operations.md#the-local-archive).
@@ -264,7 +269,7 @@ The five moderation tools exist so that every rights change has an undo. Grantin
 
 `telegram_media_fetch` looks like a read tool but isn't one — it writes a file, so it goes through the same server-controlled path handling as everything else that touches disk: the caller never supplies a path, the file lands under a download root with a generated name (`O_CREAT|O_EXCL|O_NOFOLLOW`, a size cap and a running quota), and only an opaque `artifact_id` comes back.
 
-`telegram_plan_send_file` is the same rule pointed the other way, and it is the more dangerous direction: a caller that could name any path on the host would have a read of arbitrary bytes with a delivery mechanism attached — a private key, the `.session` file that *is* the account, somebody's documents — into a chat other people read. So a file is sent from one directory (`paths.uploads`), containment is decided after symlinks are resolved, and the size ceiling is answered from `stat()` rather than from a transfer that fails halfway. The plan's summary names the file, its size, its type and **the form it arrives in**, because "send photo.jpg" hides the difference between a re-encoded picture and the original file. See [`docs/operations.md`](docs/operations.md#sending-a-file-where-the-bytes-may-come-from).
+`telegram_plan_send_file` is the same rule pointed the other way, and it is the more dangerous direction: a caller that could name any path on the host would have a read of arbitrary bytes with a delivery mechanism attached — a private key, the `.session` file that *is* the account, somebody's documents — into a chat other people read. So a file is sent from one directory (`paths.uploads`), containment is decided after symlinks are resolved, and the size ceiling is answered from `stat()` rather than from a transfer that fails halfway. The plan's summary names the file, its size, its type and **the form it arrives in**, because "send photo.jpg" hides the difference between a re-encoded picture and the original file. See [`docs/operations.md`](docs/operations.md#sending-a-file-where-the-bytes-may-come-from). `telegram_plan_set_chat_photo` publishes a chat photo through that same rule rather than a second copy of it — the weaker of two rules for "which local file may leave" is the one that becomes the hole.
 
 No read tool ever marks a chat read — `mark_read` only exists as an explicit plan operation, because an agent asked to "just look" at a chat should never have a side effect on what the other person sees as unread. That includes the read-state block `telegram_chat_read` returns: it comes from a call that *describes* a dialog's read pointers without acknowledging anything in it.
 

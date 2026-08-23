@@ -9,6 +9,53 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- `tg-ai account block` / `telegram_plan_block_user` and `tg-ai account unblock` /
+  `telegram_plan_unblock_user` — stop one person from writing to or calling this
+  account, and let them back. **This is a setting of the account, not a chat
+  ban**, and the plan summary says so in the sentence a reviewer reads: nobody is
+  removed from any chat, no ban is created or lifted, and the effect exists only
+  between that person and this account. The two are one word apart in a tool
+  listing, and approving the wrong one is not something reading the other
+  afterwards undoes. The person is judged against `safety.write.admin` — the list
+  that already says which people this tool may act on — and against the hard
+  denylist first, so Service Notifications stays unreachable. A peer that is not
+  a person is refused, at planning time and again at apply time, rather than
+  quietly doing something else.
+- `tg-ai chat create --kind channel` / `telegram_plan_create_group` — the same
+  operation now creates a broadcast channel as well as a supergroup, and says
+  which in the preview along with what it means (only admins post, everyone else
+  reads). Neither kind gets a public link: a chat created here has no username
+  until somebody gives it one. A channel is refused any initial `users` — an
+  audience assembled by the same approval that created the broadcast is an
+  audience nobody chose, and `chat.invite` admits people one approval at a time.
+  The kind is a precondition, compared again at apply time.
+- `tg-ai chat set-title` / `telegram_plan_set_chat_title` and `tg-ai chat set-about`
+  / `telegram_plan_set_chat_about` — rename a chat or change its description. Both
+  previews quote the **current** value next to the replacement, because Telegram
+  keeps no copy of either: once applied, the old one exists nowhere but the plan.
+  Both record the current value's digest and refuse at apply time if it moved, so
+  a plan approved against one title cannot overwrite another. `set_about` spends
+  an extra request fetching the description no entity carries, rather than
+  showing an empty "current" it never checked; a change that would alter nothing
+  is refused, and the refusal names the chat by id because an error envelope is
+  outside the wrapper that marks stranger-written text as data.
+- `tg-ai chat set-photo` / `telegram_plan_set_chat_photo` — replace a chat's photo
+  with an image from the outbox. The file is chosen by `outbox.resolve_outbound`,
+  the same rule `message send-file` uses rather than a second copy of it: two
+  answers to "which local file may leave this machine" is how the weaker one
+  becomes the hole. On top of that rule, the file must be a format Telegram
+  compresses (JPEG or PNG, decided by the same `classify` that decides how a send
+  is presented), and the plan records the id of the photo being replaced — a
+  photo cannot be quoted in a preview the way a title can, so the one going out
+  is named by digest and the one being replaced by id, and a *different* photo
+  appearing between review and apply is refused. A chat photo draws on
+  `upload.timeout_seconds` rather than the 60-second per-RPC ceiling, because it
+  is a transfer.
+- All five refuse a peer of the wrong shape before anything is planned: a chat id
+  is not a person to block, and a private conversation has no title, description
+  or photo of its own. Without the check the plan would be approved and then fail
+  inside Telethon at apply time — the one moment nothing can be done about it.
+
 - `tg-ai message schedule` / `telegram_plan_schedule_message` — plan a message for a
   given time, or for the moment the other person is next online. The point is not
   that it goes out later: once the plan is applied the message sits in **Telegram's

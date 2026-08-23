@@ -120,7 +120,7 @@ replaying from their own machine, which is a good way to have it killed.
 | `paths.sessions` | `$XDG_STATE_HOME/telegram-ai-cli/sessions` (else `~/.local/state/…`) | `.session` files, device fingerprints, session locks |
 | `paths.state` | `$XDG_STATE_HOME/telegram-ai-cli` | `state.db` (accounts, plans, rate limits) and `secret.key` |
 | `paths.downloads` | `…/telegram-ai-cli/downloads` | Everything `media fetch` writes |
-| `paths.uploads` | `…/telegram-ai-cli/uploads` | The only directory `message send-file` may send *from* |
+| `paths.uploads` | `…/telegram-ai-cli/uploads` | The only directory a file may leave from — `message send-file` sends from it, `chat set-photo` publishes from it |
 | `paths.audit_log` | `…/telegram-ai-cli/audit.jsonl` | The append-only audit log |
 | `paths.archive` | `…/telegram-ai-cli/archive.sqlite3` | The local message archive — only what `archive sync` was told to copy |
 

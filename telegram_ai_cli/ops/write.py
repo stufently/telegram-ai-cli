@@ -34,7 +34,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -467,11 +467,29 @@ class LeaveChatInput(WriteInput):
 class CreateGroupInput(WriteInput):
     title: str = Field(min_length=1, max_length=128)
     about: str = Field(default="", max_length=255)
+    kind: Literal["supergroup", "channel"] = Field(
+        default="supergroup",
+        description=(
+            "supergroup: everybody admitted can post. channel: a broadcast, where only "
+            "admins post and everyone else reads. Neither gets a public link."
+        ),
+    )
     users: list[int | str] = Field(
         default_factory=list,
         max_length=50,
         description="Initial members. Each is checked against the admin policy.",
     )
+
+    @model_validator(mode="after")
+    def _a_channel_starts_empty(self) -> CreateGroupInput:
+        """A broadcast created with an audience already in it is an audience
+        nobody chose to have — and unlike a group, they cannot answer back.
+        Admitting people is ``chat.invite``, with an approval of its own."""
+        if self.kind == "channel" and self.users:
+            raise ValueError(
+                "a channel is created empty; plan chat.invite for each person afterwards"
+            )
+        return self
 
 
 class InviteUserInput(WriteInput):
@@ -983,8 +1001,19 @@ async def plan_create_group(ctx: OperationContext, params: BaseModel) -> Plan:
             invitees.append(resolved)
 
     listed = "\n".join(f"  {describe(r)}" for r in invitees) or "  (nobody)"
+    # Which kind is not a detail: it decides whether the people who end up there
+    # can speak at all, and the two are one word apart in a tool call.
+    kind_line = (
+        "a broadcast channel: only admins post, everyone else reads"
+        if p.kind == "channel"
+        else "a supergroup: everybody admitted can post"
+    )
     summary = (
-        f'Create a supergroup titled "{sanitize_line(p.title, limit=80)}" as {label}\n'
+        f'Create {p.kind} "{sanitize_line(p.title, limit=80)}" as {label}\n'
+        f"  kind:    {kind_line}\n"
+        "  reach:   private — it gets no public link and no username; "
+        "somebody has to give it one later for it to be findable\n"
+        f"--- description ({len(p.about)} chars) ---\n{quote_for_review(p.about, limit=255)}\n"
         f"--- initial members ---\n{listed}"
     )
     return await _create(
@@ -996,6 +1025,10 @@ async def plan_create_group(ctx: OperationContext, params: BaseModel) -> Plan:
             # No chat id exists yet, so the only snapshot worth taking is of
             # the people who would be pulled in.
             "title_sha256": text_digest(p.title),
+            # Compared again at apply time, like a promotion's rights: a plan
+            # row edited between review and apply must not turn the supergroup
+            # somebody approved into a channel nobody may answer in.
+            "kind": p.kind,
             "users": [peer_snapshot(r) for r in invitees],
         },
         summary=summary,
@@ -1489,7 +1522,11 @@ CREATE_GROUP = _register(
     name="chat.create",
     cli=("chat", "create"),
     plan_tool="telegram_plan_create_group",
-    summary="Plan the creation of a supergroup.",
+    summary="Plan the creation of a supergroup or a broadcast channel.",
+    description=(
+        "`kind` decides which: a supergroup everybody admitted may post in, or a channel "
+        "only admins post in. Neither gets a public link, and a channel is created empty."
+    ),
     input_model=CreateGroupInput,
     capability=Capability.ADMIN,
     planner=plan_create_group,
@@ -1588,8 +1625,10 @@ SET_PROFILE = _register(
     planner=plan_set_profile,
 )
 
-#: Every remote write, in registration order. The applier dispatches on
-#: ``Operation.name``, so this is also the list of names it must cover.
+#: Every remote write *declared in this module*, in registration order. The
+#: settings writes live in :mod:`telegram_ai_cli.ops.settings` and have a list
+#: of their own; the applier dispatches on ``Operation.name`` and must cover
+#: both, which is asserted against the registry rather than against either list.
 WRITE_OPERATIONS: tuple[Operation, ...] = (
     SEND_MESSAGE,
     REPLY_MESSAGE,

@@ -15,6 +15,22 @@ is
 
 ## Known gaps
 
+- [ ] **A chat photo can be replaced but not removed.** `chat.set_photo` takes a
+      required `path`, and Telegram clears a photo with a distinct empty object
+      rather than an absent file. Making `path` optional would weaken the one
+      preview that matters here — "set the photo to *this file*" is reviewable,
+      "set the photo to nothing in particular" is a different sentence — so
+      clearing wants an operation of its own, which nobody has asked for yet.
+
+- [ ] **The block list cannot be read.** `account.block` and `account.unblock`
+      write it; `contacts.getBlocked` would read it, and there is no operation
+      for that — so an agent cannot tell whether a person is already blocked, and
+      an unblock of somebody who never was succeeds silently. It is a read of the
+      account's own settings rather than of a chat, so it needs the decision
+      `sessions` needed: which capability governs it, and whether it is on by
+      default. Raised while implementing the writes, deliberately not answered in
+      the same change.
+
 - [ ] **No handler-level tests.** Everything under `ops/` is tested through its
       pure parts (`_serialize`, `links`, `untrusted`, the policy kernel); no test
       drives a handler with a fake Telethon client. Raised by review: the cases

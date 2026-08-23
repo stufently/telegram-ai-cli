@@ -73,7 +73,7 @@ RPC_TIMEOUT_SECONDS = 60
 #: getting it wrong is not a retry but an ``unknown_outcome`` a person has to
 #: resolve by hand, because a timeout mid-upload proves nothing about whether
 #: the message appeared.
-_UPLOAD_OPERATIONS = frozenset({"message.send_file"})
+_UPLOAD_OPERATIONS = frozenset({"message.send_file", "chat.set_photo"})
 
 #: Which budget each operation draws from, and therefore which ceiling refuses
 #: it. Keyed by ``Operation.name`` so a new write cannot be added without
@@ -562,6 +562,11 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
             require_planning_profile(ctx, Capability.ADMIN, action=action)
             ctx.safety.require_group_creation()
             peers: dict[str, Resolved] = {}
+            if pre.get("kind", "supergroup") != params.kind:  # type: ignore[attr-defined]
+                raise PlanPreconditionFailed(
+                    "the kind of chat recorded in the plan differs from the one being "
+                    "created; a supergroup and a channel are not the same approval"
+                )
             for index, user in enumerate(params.users):  # type: ignore[attr-defined]
                 resolved = await resolve_peer(client, user)
                 require_peer(ctx, Capability.ADMIN, resolved.ref, action=action)
@@ -619,7 +624,98 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
             ctx.safety.require_profile_change()
             return _Prepared(limit_target=plan.account, warnings=warnings)
 
+        case "account.block" | "account.unblock":
+            from .ops.settings import require_person
+
+            require_planning_profile(ctx, Capability.ADMIN, action=action)
+            user = await resolve_peer(client, params.user)  # type: ignore[attr-defined]
+            require_peer(ctx, Capability.ADMIN, user.ref, action=action)
+            # Re-checked rather than trusted from the plan: the block list holds
+            # people, and the id is resolved again here.
+            require_person(user, action=action)
+            warnings += _check_peer(pre["user"], user, what="user")
+            return _Prepared(
+                limit_target=str(user.ref.peer_id),
+                peers={"user": user},
+                audit_peer_id=user.ref.peer_id,
+                warnings=warnings,
+            )
+
+        case "chat.set_title" | "chat.set_about" | "chat.set_photo":
+            return await _verify_chat_setting(ctx, client, plan, params, warnings)
+
     raise InvalidInput(f"no applier for operation {sanitize_line(operation, limit=64)}")
+
+
+async def _verify_chat_setting(
+    ctx: OperationContext,
+    client: Any,
+    plan: Plan,
+    params: BaseModel,
+    warnings: list[str],
+) -> _Prepared:
+    """Re-check a chat identity change, including the value it overwrites.
+
+    The peer check is the same one every admin operation runs. What is specific
+    here is the *current* value: the summary a person approved quoted it, and
+    Telegram keeps no copy once it is replaced — so a title, a description or a
+    photo that moved between review and apply means the reviewed sentence no
+    longer describes what would be lost, and the plan is refused rather than
+    applied against a value nobody saw.
+    """
+    from .ops.settings import (
+        current_about,
+        current_photo_id,
+        require_chat_peer,
+        require_photo_file,
+    )
+    from .ops.write import require_peer, require_planning_profile, resolve_peer, text_digest
+
+    pre = plan.preconditions
+    operation = plan.operation
+    action = f"apply:{operation}"
+
+    require_planning_profile(ctx, Capability.ADMIN, action=action)
+    chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+    require_peer(ctx, Capability.ADMIN, chat.ref, action=action)
+    require_chat_peer(chat, action=action)
+    warnings += _check_peer(pre["peer"], chat, what="chat")
+
+    attachment: OutboundFile | None = None
+    match operation:
+        case "chat.set_title":
+            if pre.get("current_title_sha256") != text_digest(chat.ref.title or ""):
+                raise PlanPreconditionFailed(
+                    "the chat has been renamed since the plan was reviewed; the title the "
+                    "summary showed is not the one that would be overwritten",
+                    suggestion="Reject this plan and create a new one against the current title.",
+                )
+        case "chat.set_about":
+            if pre.get("current_about_sha256") != text_digest(await current_about(client, chat)):
+                raise PlanPreconditionFailed(
+                    "the chat's description has changed since the plan was reviewed"
+                )
+        case _:
+            # Resolved again through the outbox rule, not read from the plan: a
+            # path that was permitted when the plan was written must not be
+            # published from a directory the configuration has since closed.
+            attachment = resolve_outbound(ctx.settings, params.path)  # type: ignore[attr-defined]
+            require_photo_file(attachment)
+            warnings += _check_file(pre["file"], attachment)
+            if pre.get("current_photo_id") != await current_photo_id(client, chat):
+                raise PlanPreconditionFailed(
+                    "the chat's photo has changed since the plan was reviewed; the one the "
+                    "summary described is not the one that would be replaced",
+                    suggestion="Reject this plan and create a new one against the current photo.",
+                )
+
+    return _Prepared(
+        limit_target=str(chat.ref.peer_id),
+        peers={"chat": chat},
+        attachment=attachment,
+        audit_peer_id=chat.ref.peer_id,
+        warnings=warnings,
+    )
 
 
 async def _verify_mark(
@@ -986,7 +1082,11 @@ async def _execute(
                 functions.channels.CreateChannelRequest(
                     title=params.title,  # type: ignore[attr-defined]
                     about=params.about,  # type: ignore[attr-defined]
-                    megagroup=True,
+                    # Exactly one of the two, from the kind the plan recorded and
+                    # verification compared. Neither flag makes it public: a chat
+                    # is findable only once somebody gives it a username.
+                    megagroup=params.kind == "supergroup",  # type: ignore[attr-defined]
+                    broadcast=params.kind == "channel",  # type: ignore[attr-defined]
                 )
             )
             created = result.chats[0]
@@ -1272,6 +1372,59 @@ async def _execute(
             }
             await client(functions.account.UpdateProfileRequest(**fields))
             return {"changed": sorted(fields)}, warnings
+
+        case "account.block" | "account.unblock":
+            user_peer = await client.get_input_entity(prepared.peers["user"].ref.peer_id)
+            blocking = operation == "account.block"
+            request = (
+                functions.contacts.BlockRequest if blocking else functions.contacts.UnblockRequest
+            )
+            await client(request(id=user_peer))
+            # Reported as the state the account is now in rather than as
+            # "unblocked: true", so both operations answer the same question.
+            return {"blocked": blocking}, warnings
+
+        case "chat.set_title":
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            title = params.title  # type: ignore[attr-defined]
+            if isinstance(peer, types.InputPeerChannel):
+                await client(functions.channels.EditTitleRequest(channel=peer, title=title))
+            else:
+                await client(
+                    functions.messages.EditChatTitleRequest(chat_id=peer.chat_id, title=title)
+                )
+            return {"title": "changed"}, warnings
+
+        case "chat.set_about":
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            # One request for both kinds of chat: unlike a title or a photo,
+            # Telegram keeps the description on the peer rather than on the
+            # channel object.
+            await client(
+                functions.messages.EditChatAboutRequest(
+                    peer=peer,
+                    about=params.about,  # type: ignore[attr-defined]
+                )
+            )
+            return {"about": "changed"}, warnings
+
+        case "chat.set_photo":
+            image = prepared.attachment
+            if image is None:  # pragma: no cover - verification always sets it
+                raise InvalidInput("the image was never resolved; refusing to upload")
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            # Uploaded here rather than during verification: an upload is
+            # already an effect on Telegram's servers, and everything before
+            # this line has to stay refusable.
+            uploaded = await client.upload_file(str(image.path))
+            photo = types.InputChatUploadedPhoto(file=uploaded)
+            if isinstance(peer, types.InputPeerChannel):
+                await client(functions.channels.EditPhotoRequest(channel=peer, photo=photo))
+            else:
+                await client(
+                    functions.messages.EditChatPhotoRequest(chat_id=peer.chat_id, photo=photo)
+                )
+            return {"photo": "changed", "sha256": image.sha256, "file": image.name}, warnings
 
     raise InvalidInput(f"no applier for operation {sanitize_line(operation, limit=64)}")
 

@@ -999,7 +999,7 @@ would act on the lie.
 
 ## Plan operations
 
-Twenty-five. Each one **validates and records an intention and returns a `plan_id`**;
+Thirty. Each one **validates and records an intention and returns a `plan_id`**;
 nothing reaches Telegram until a person runs `tg-ai plan apply <id>`. Over MCP
 they are `telegram_plan_*` tools. There is no tool that applies a plan — see
 [Safety](../README.md#safety) for what that does and does not promise.
@@ -1025,7 +1025,7 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | `message.unpin` | `tg-ai message unpin` | `telegram_plan_unpin_message` | `admin` | `chat`\*, `message_id` |
 | `chat.join` | `tg-ai chat join` | `telegram_plan_join_chat` | `join` | `target`\* (`@username` or `t.me/+HASH`) |
 | `chat.leave` | `tg-ai chat leave` | `telegram_plan_leave_chat` | `join` | `chat`\* |
-| `chat.create` | `tg-ai chat create` | `telegram_plan_create_group` | `admin` | `title`\*, `about`="", `users` (list) |
+| `chat.create` | `tg-ai chat create` | `telegram_plan_create_group` | `admin` | `title`\*, `about`="", `kind`="supergroup" (or `"channel"`), `users` (list) |
 | `chat.invite` | `tg-ai chat invite` | `telegram_plan_invite_user` | `admin` | `chat`\*, `user`\* |
 | `chat.promote` | `tg-ai chat promote` | `telegram_plan_promote_admin` | `admin` | `chat`\*, `user`\*, `rights`\* (object), `rank`="" |
 | `chat.ban` | `tg-ai chat ban` | `telegram_plan_ban_user` | `admin` | `chat`\*, `user`\* |
@@ -1034,6 +1034,11 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | `chat.restrict` | `tg-ai chat restrict` | `telegram_plan_restrict_user` | `admin` | `chat`\*, `user`\*, `restrictions`\* (object), `duration_seconds`=0 |
 | `chat.demote` | `tg-ai chat demote` | `telegram_plan_demote_admin` | `admin` | `chat`\*, `user`\* |
 | `account.profile` | `tg-ai account profile` | `telegram_plan_set_profile` | `profile` | at least one of `first_name`, `last_name`, `about` |
+| `account.block` | `tg-ai account block` | `telegram_plan_block_user` | `admin` | `user`\* |
+| `account.unblock` | `tg-ai account unblock` | `telegram_plan_unblock_user` | `admin` | `user`\* |
+| `chat.set_title` | `tg-ai chat set-title` | `telegram_plan_set_chat_title` | `admin` | `chat`\*, `title`\* |
+| `chat.set_about` | `tg-ai chat set-about` | `telegram_plan_set_chat_about` | `admin` | `chat`\*, `about`\* (empty clears it) |
+| `chat.set_photo` | `tg-ai chat set-photo` | `telegram_plan_set_chat_photo` | `admin` | `chat`\*, `path`\* (a JPEG or PNG inside `paths.uploads`) |
 
 \* required.
 
@@ -1139,6 +1144,42 @@ Notes that are not obvious from the table:
   `plan` profile: it is account-scoped, so no chat allowlist can express it.
 - **`chat.mark_read` exists so that reading never has to.** It is the only way
   this tool touches the read pointer.
+- **`account.block` is a setting of the account, not a chat ban.** It stops one
+  person from writing to or calling *this account*, and removes them from
+  nothing: no chat loses a member, and no ban is created or lifted anywhere. The
+  preview says so in as many words, because the two are one word apart in a tool
+  listing and approving the wrong one is not something reading the other
+  afterwards undoes. `account.unblock` is its undo. The person is judged against
+  `safety.write.admin` — the list that already says which *people* this tool may
+  act on — and against the hard denylist before it, so Service Notifications
+  cannot be blocked whatever the configuration says. A chat id is refused rather
+  than quietly doing something else.
+- **`chat.create` takes a `kind`.** `supergroup` (the default) is a chat
+  everybody admitted can post in; `channel` is a broadcast where only admins
+  post. Neither is public: a chat created here has no username and no link until
+  somebody gives it one. A channel is additionally refused any `users`, because
+  an audience assembled by the same approval that created the broadcast is an
+  audience nobody chose — `chat.invite` admits people, one approval each. The
+  kind is recorded in the plan and compared again at apply time.
+- **Renaming shows what it overwrites.** `chat.set_title` and `chat.set_about`
+  quote the current value next to the replacement and record its digest;
+  applying is refused if either moved in the meantime. Telegram keeps no copy of
+  a chat's previous name or description, so between review and apply the plan is
+  the last place the old one exists — and every member sees the new one.
+  `chat.set_about` spends one extra request fetching the description no entity
+  carries, rather than showing an empty "current" it never checked. All three
+  refuse a peer that is not a group or a channel: a private conversation has no
+  title, description or photo of its own, and without the check the plan would
+  be approved and then fail inside Telethon at apply time.
+- **A chat photo comes from the outbox, like anything else this tool sends.**
+  `chat.set_photo` takes a `path` and hands it to the same
+  `outbox.resolve_outbound` `message.send_file` uses — one rule for "which local
+  file may leave", not two, since the weaker of two is the one that becomes the
+  hole. On top of it: the file has to be a format Telegram compresses (JPEG or
+  PNG, decided by the same `classify` that decides how a send is presented), and
+  the plan records the id of the photo being replaced so a *different* photo
+  appearing between review and apply is refused. Removing a photo is not
+  supported; see [`TASKS.md`](../TASKS.md).
 - **`message.send_file` takes one file, from one directory.** The path rule and
   the size ceiling are below; the short version is that a caller names a file
   *inside the outbox*, never a path on the host.
