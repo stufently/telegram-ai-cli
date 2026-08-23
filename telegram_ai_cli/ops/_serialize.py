@@ -230,6 +230,66 @@ def topic_id_of(message: Any) -> int | None:
     return getattr(reply_to, "reply_to_top_id", None) or getattr(reply_to, "reply_to_msg_id", None)
 
 
+def is_forum(entity: Any) -> bool:
+    """Whether this chat keeps its messages in topics rather than one history.
+
+    Read off the flag Telegram sets on the channel, not guessed from the
+    presence of topic ids on messages: a forum with every message in the
+    General topic looks exactly like an ordinary supergroup from the messages
+    alone, and a chat that had topics turned off keeps the old ones on its
+    history.
+    """
+    return bool(getattr(entity, "forum", False))
+
+
+def topic_summary(topic: Any, *, chat: PeerRef | None = None) -> dict[str, Any]:
+    """One forum topic, flattened.
+
+    Two shapes arrive in the same list. ``ForumTopic`` is the topic itself;
+    ``ForumTopicDeleted`` carries an id and nothing else, and it is serialized
+    into the same keys rather than dropped — a caller that remembered the id
+    has to learn that it is gone, and a missing row looks like a page boundary.
+    Its counters come back ``null`` instead of ``0``, because "no unread
+    messages" and "no topic" are different statements.
+
+    The draft Telegram attaches to a topic is deliberately not serialized: it
+    is text this account typed and never sent, and a listing is not the place
+    to disclose it.
+    """
+    topic_id = getattr(topic, "id", None)
+    # Attribute shape rather than a class name, like everything else here: a
+    # deleted topic is the one that cannot say what it was called.
+    deleted = not hasattr(topic, "title")
+    emoji_id = getattr(topic, "icon_emoji_id", None)
+    return {
+        "id": topic_id,
+        "title": getattr(topic, "title", None),
+        "deleted": deleted,
+        "created_at": iso(getattr(topic, "date", None)),
+        # Topics are opened by a message, and that message's id *is* the topic
+        # id — which is what makes `reply_to=<topic>` a history filter.
+        "top_message_id": getattr(topic, "top_message", None),
+        "unread": _optional_int(getattr(topic, "unread_count", None)),
+        "mentions": _optional_int(getattr(topic, "unread_mentions_count", None)),
+        "unread_reactions": _optional_int(getattr(topic, "unread_reactions_count", None)),
+        "read_inbox_max_id": getattr(topic, "read_inbox_max_id", None),
+        "closed": bool(getattr(topic, "closed", False)),
+        "hidden": bool(getattr(topic, "hidden", False)),
+        "pinned": bool(getattr(topic, "pinned", False)),
+        "mine": bool(getattr(topic, "my", False)),
+        "icon_color": getattr(topic, "icon_color", None),
+        # A custom emoji id is 64-bit; a JSON consumer parsing it as a double
+        # loses the low bits, which is the whole identifier.
+        "icon_emoji_id": str(emoji_id) if emoji_id is not None else None,
+        "link": message_link(chat, topic_id),
+    }
+
+
+def _optional_int(value: Any) -> int | None:
+    """A counter Telegram reported, or nothing — never a fabricated zero."""
+    return None if value is None else int(value)
+
+
 def message_link(chat: PeerRef | None, message_id: Any, topic_id: int | None = None) -> str | None:
     """The permanent address of a message, or ``None`` where none exists.
 

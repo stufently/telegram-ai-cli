@@ -52,6 +52,7 @@ from ._common import (
 from ._serialize import (
     ReadPointers,
     dialog_summary,
+    is_forum,
     message_summary,
     participant_summary,
     peer_ref,
@@ -83,8 +84,8 @@ class ChatReadInput(ReadInput):
     chat: str = Field(
         description=(
             "Chat id, @username, or t.me link. A link to a specific message "
-            "(t.me/name/123, t.me/c/123/456, or a topic link) starts the page at "
-            "that message instead of at the newest one."
+            "(t.me/name/123, t.me/c/123/456) starts the page at that message instead "
+            "of at the newest one, and a topic link filters the page to that topic."
         )
     )
     limit: int = Field(default=30, ge=1, le=MAX_PAGE, description="Messages to return.")
@@ -94,6 +95,15 @@ class ChatReadInput(ReadInput):
         description="Return messages older than this id — the way to page backwards.",
     )
     search: str | None = Field(default=None, description="Only messages containing this text.")
+    topic_id: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Only messages in this forum topic. A topic link (t.me/c/123/12/456 or "
+            "?thread=12) supplies it too. Refused on a chat that is not a forum, and "
+            "cannot be combined with search. List topics with `chat topics`."
+        ),
+    )
     include_read_state: bool = Field(
         default=True,
         description=(
@@ -199,6 +209,88 @@ def message_id_from(explicit: int | None, link: TelegramLink | None, *, what: st
     if chosen is None:
         raise InvalidInput(f"{what}: pass message_id, or a t.me link that names the message itself")
     return chosen
+
+
+def topic_id_from(explicit: int | None, link: TelegramLink | None, *, what: str) -> int | None:
+    """Which forum topic a page is filtered to, refusing to guess.
+
+    Same rule as :func:`message_id_from`, for the same reason: an argument and
+    a link that disagree mean the caller named two different threads, and
+    quietly preferring one of them returns a page nobody asked for. ``None``
+    here is an ordinary answer — it means the whole chat.
+    """
+    from_link = link.topic_id if link is not None else None
+    if explicit is not None and from_link is not None and explicit != from_link:
+        raise InvalidInput(
+            f"{what}: the link names topic {from_link} but topic_id says {explicit}; "
+            "pass one of them, not both"
+        )
+    return explicit if explicit is not None else from_link
+
+
+def guard_topic_filter(
+    ref: PeerRef,
+    *,
+    topic_id: int | None,
+    forum: bool,
+    search: str | None,
+    what: str,
+) -> None:
+    """Refuse a topic filter that could not mean what it says.
+
+    **A topic outside a forum.** Only a forum keeps its messages in threads.
+    Filtering an ordinary chat to a topic would fetch the reply thread of
+    whichever message happens to carry that id — usually empty, which is
+    indistinguishable from a topic where nobody has spoken.
+
+    **A topic and a text search together.** Telethon reads a thread through
+    ``messages.getReplies``, and that request carries no query; its branch also
+    wins over the search branch, so passing both drops one of them without a
+    word. Refusing is the only outcome that cannot mislead: a search that
+    silently covered the whole forum, or a topic page that silently ignored the
+    query, both answer a question nobody asked.
+    """
+    if topic_id is None:
+        return
+    if not forum:
+        # By id, never by title: an error is built outside `telegram_result`, and
+        # `Envelope.failure` neither wraps nor defangs — a chat title is written
+        # by a stranger, and this is not a field that can carry one unmarked.
+        raise InvalidInput(
+            f"{what}: topic {topic_id} was named, but chat {ref.peer_id} is not a "
+            "forum — it has no topics, and its messages are one history. Drop topic_id "
+            "(or the topic in the link) to read the whole chat.",
+        )
+    if search:
+        raise InvalidInput(
+            f"{what}: a topic filter and a search cannot be combined — Telegram serves a "
+            "topic through its replies call, which carries no query. Search the whole chat "
+            "and read topic_id on each result, or drop the search.",
+        )
+
+
+def history_kwargs(
+    *, limit: int, max_id: int, search: str | None, topic_id: int | None
+) -> dict[str, Any]:
+    """The arguments one page of history is fetched with.
+
+    Separate from the handler because these values decide which *request*
+    Telethon sends, and that choice is the whole of topic filtering: with
+    ``reply_to`` set it sends ``messages.getReplies`` — the thread hanging off
+    the message that opened the topic — instead of ``messages.getHistory``.
+    ``max_id`` keeps working across that switch, because Telethon folds it into
+    the request's offset either way.
+
+    ``search`` is cleared alongside, and that is not redundancy for its own
+    sake: :func:`guard_topic_filter` refuses the combination at the front door,
+    and this makes the silently-dropped query unreachable even if some later
+    caller assembles the arguments without asking the guard first.
+    """
+    kwargs: dict[str, Any] = {"limit": limit, "max_id": max_id, "search": search}
+    if topic_id is not None:
+        kwargs["reply_to"] = topic_id
+        kwargs["search"] = None
+    return kwargs
 
 
 async def read_state_of(
@@ -343,13 +435,37 @@ async def handle_chat_read(ctx: OperationContext, params: ChatReadInput) -> Enve
             )
         if anchor is not None:
             extra["anchor_message_id"] = anchor
-        if link is not None and link.topic_id is not None:
-            # Not applied as a filter: the page still covers the whole chat, and
-            # a caller expecting only that topic deserves to be told.
-            extra["topic_id"] = link.topic_id
+
+        forum = is_forum(entity)
+        topic = topic_id_from(params.topic_id, link, what="chat.read")
+        if topic is None and forum:
+            # Not a refusal: "what happened across the forum" is a real question,
+            # and every row carries its own `topic_id`. But an unfiltered forum
+            # page is several conversations interleaved into one list, and a
+            # reader summarising it without knowing that reports a discussion
+            # nobody had.
             warnings.append(
-                f"the link names topic {link.topic_id}; this page is not filtered to it"
+                "this chat is a forum: the page interleaves its topics, and the "
+                "messages either side of one are usually not a reply to it. Pass "
+                "topic_id (`chat topics` lists them) to read a single thread"
             )
+        if topic is not None:
+            guard_topic_filter(
+                ref,
+                topic_id=topic,
+                forum=forum,
+                search=params.search,
+                what="chat.read",
+            )
+            extra["topic_id"] = topic
+            if params.include_read_state:
+                # The pointers below belong to the dialog, and a forum has one
+                # dialog for all its topics. Saying so is cheaper than letting a
+                # caller read this topic's unread count off the whole chat's.
+                warnings.append(
+                    f"read_state describes the whole chat, not topic {topic}; "
+                    "`chat topics` reports unread counts per topic"
+                )
 
         pointers = ReadPointers(peer_receipts=False)
         read_state: dict[str, Any] = {
@@ -369,9 +485,12 @@ async def handle_chat_read(ctx: OperationContext, params: ChatReadInput) -> Enve
             max_id = params.before_id or (anchor + 1 if anchor is not None else 0)
             messages = await account.client.get_messages(
                 entity,
-                limit=params.limit,
-                max_id=max_id,
-                search=params.search,
+                **history_kwargs(
+                    limit=params.limit,
+                    max_id=max_id,
+                    search=params.search,
+                    topic_id=topic,
+                ),
             )
 
         rows = [message_summary(message, chat=ref, read=pointers) for message in messages]
@@ -473,7 +592,9 @@ CHAT_READ = REGISTRY.register(
             "Fetches up to 500 messages with attachment metadata, reaction counts, a "
             "permalink per message and, where Telegram reports it, whether each one has "
             "been read. Page backwards with before_id; a t.me link to a message starts "
-            "the page at that message. Reading never marks anything as seen."
+            "the page at that message. In a forum, topic_id (or a topic link) limits the "
+            "page to one topic — without it the topics arrive interleaved. Reading never "
+            "marks anything as seen."
         ),
         input_model=ChatReadInput,
         effect=Effect.READ,
