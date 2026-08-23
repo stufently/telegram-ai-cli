@@ -9,6 +9,45 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- **Moderation, and an undo for every rights change** — `telegram_plan_ban_user`,
+  `telegram_plan_unban_user`, `telegram_plan_kick_user`,
+  `telegram_plan_restrict_user`, `telegram_plan_demote_admin` (`tg-ai chat ban`
+  / `unban` / `kick` / `restrict` / `demote`). The project could hand somebody
+  admin rights and had no way to take any back, which meant an agent could
+  produce a state it was unable to reverse. Now `chat.ban` is paired with
+  `chat.unban`, `chat.promote` with `chat.demote`, and `chat.restrict` either
+  expires by itself or is lifted by the same unban — Telegram keeps a ban and a
+  restriction in one `ChatBannedRights`, so one request clears both.
+  **They are `remote_write` like every other effect**, which means each one is
+  planned, reviewed and applied from a terminal; none of them has a direct MCP
+  tool, and the registry's invariants refuse to publish one.
+  **One member per plan.** Every input takes a single `user`, never a list:
+  banning six people behind one approval is the blast radius the confirmation
+  step exists to bound.
+  **The preview is the point.** It names the chat and the person by title,
+  `@username` and numeric id, lists each right a restriction takes away in
+  words, says how long it lasts — and for the two the person on the receiving
+  end cannot reverse, a ban and a kick, it says so in as many words.
+  `duration_seconds` is a duration rather than a date, counted from the moment
+  the plan is applied, because a plan can wait in the review queue for hours;
+  it is refused outside 60 seconds … 365 days — inside the window Telegram
+  silently reads as permanent, by a margin, because the deadline is computed
+  here and read by a server one round trip and one clock away.
+  **What a basic group cannot do is refused rather than faked**: it keeps no ban
+  list and no per-member rights, so `chat.unban` and `chat.restrict` are refused
+  while the plan is written and again at apply time, and `chat.ban` says on the
+  approval screen that it can only remove the person there. A kick in a
+  supergroup is a ban immediately lifted — the only way Telegram offers — with
+  both requests issued explicitly; a failure of the *second* one is reported as
+  an unknown outcome saying the person is **banned, not kicked**, with the
+  rate-limit slot kept. Left to the general error handling a flood wait there
+  counts as "no effect", which would refund the budget and close the plan as
+  failed while the ban stood (raised by review).
+  `tests/test_moderation.py` drives the planners over a fake client and the
+  applier's own RPC step over another, which is how "planning issues no
+  request", "one flag takes GIFs and inline results with it" and "a restriction
+  is not a ban" are asserted rather than reviewed.
+
 - `telegram_folders` / `tg-ai folders` — the account's chat folders, which are
   the one grouping in this system a *person* authored: id, name, emoji, the
   chats each folder names or excludes, and the category flags it carries
@@ -359,6 +398,12 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- A promotion that granted `manage_topics` now actually grants it. The right was
+  accepted by `AdminRights`, printed in the plan summary and then dropped when
+  the applier built `ChatAdminRights` — so the plan a person approved and the
+  request Telegram received disagreed about it, silently and in the direction
+  that looks like it worked (`apply.py`, found while adding the demotion that
+  reverses the same call).
 - `TGAI_`-prefixed environment variables actually override the YAML file, as the
   README, `.env.example` and the new configuration reference all say they do.
   `load_settings` passes the file in as init keyword arguments, and

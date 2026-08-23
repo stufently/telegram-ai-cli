@@ -106,6 +106,11 @@ class Resolved:
     #: This invite files a request an admin must approve, rather than joining.
     #: Recorded so the applier can report "requested" instead of "joined".
     request_needed: bool = False
+    #: A channel or supergroup rather than a basic group. Only moderation cares:
+    #: bans, per-member rights and restrictions exist in the first and not in the
+    #: second, and a preview that did not know which it was would promise
+    #: something Telegram cannot do.
+    is_channel: bool = False
 
 
 def peer_snapshot(resolved: Resolved) -> dict[str, Any]:
@@ -244,6 +249,12 @@ def reference(entity: Any, *, target: str | int | None = None) -> Resolved:
         ref=peer_ref(entity),
         access_hash=getattr(entity, "access_hash", None),
         target=target,
+        # Supergroup or basic group — a distinction the read policy deliberately
+        # does not make (both are `group`) and moderation cannot avoid: a basic
+        # group keeps no ban list and no per-member rights. Captured here, while
+        # the entity is still in hand, so a plan can say which one it is on the
+        # screen a person approves rather than discovering it at apply time.
+        is_channel=hasattr(entity, "megagroup") or hasattr(entity, "broadcast"),
     )
 
 
@@ -457,6 +468,132 @@ class PromoteAdminInput(WriteInput):
     user: int | str
     rights: AdminRights
     rank: str = Field(default="", max_length=16, description="Custom admin title.")
+
+
+class ModerationInput(WriteInput):
+    """One chat, one person.
+
+    A list of members here would let a single approval remove a dozen of them,
+    which is precisely the blast radius the review step exists to bound. The
+    field is singular in every moderation operation, and it stays that way.
+    """
+
+    chat: int | str = Field(description="Chat id or @username of the group being moderated.")
+    user: int | str = Field(description="Id or @username of the single member acted on.")
+
+
+class BanUserInput(ModerationInput):
+    user: int | str = Field(
+        description="The member to remove and block from returning. One person per plan."
+    )
+
+
+class UnbanUserInput(ModerationInput):
+    user: int | str = Field(
+        description=(
+            "The member whose ban and restrictions are lifted. This does not add them back."
+        )
+    )
+
+
+class KickUserInput(ModerationInput):
+    user: int | str = Field(
+        description="The member to remove without banning them. One person per plan."
+    )
+
+
+class DemoteAdminInput(ModerationInput):
+    user: int | str = Field(description="The admin whose rights are taken away.")
+
+
+class Restrictions(BaseModel):
+    """What a restricted member may no longer do.
+
+    Every field is a *prohibition* — ``send_messages=True`` means they may no
+    longer send messages — because that is how Telegram models it, and a layer
+    that inverted the sense would make the preview and the RPC disagree about
+    which way round a flag reads. All default to off, so a restriction takes
+    away exactly what was asked for.
+
+    ``view_messages`` is deliberately absent: taking that away *is* a ban, and
+    a ban is its own operation with its own irreversibility warning rather than
+    a flag hidden inside a rights object.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    send_messages: bool = False
+    send_media: bool = Field(
+        default=False,
+        description="Photos, video, files — and GIFs, games and inline results with them.",
+    )
+    send_stickers: bool = False
+    send_polls: bool = False
+    embed_links: bool = False
+    invite_users: bool = False
+    pin_messages: bool = False
+    change_info: bool = False
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> Restrictions:
+        if not any(self.model_dump().values()):
+            raise ValueError("a restriction must take at least one right away")
+        return self
+
+
+#: How each prohibition is named in the text a person approves. "send_media:
+#: true" is a field; "may no longer send media" is a sentence somebody can act
+#: on, and the compound flags say what they actually cover.
+RESTRICTION_LABELS: dict[str, str] = {
+    "send_messages": "send messages",
+    "send_media": "send media (photos, video, files, GIFs, games, inline results)",
+    "send_stickers": "send stickers",
+    "send_polls": "create polls",
+    "embed_links": "post links that show a preview",
+    "invite_users": "add other members",
+    "pin_messages": "pin messages",
+    "change_info": "change the chat's name, photo or description",
+}
+
+#: Telegram reads a ban shorter than 30 seconds or longer than 366 days as
+#: permanent. Both ends are refused rather than accepted and silently widened:
+#: a plan that says "for 5 seconds" and produces a permanent restriction is a
+#: lie in the one text a person approves.
+#:
+#: The accepted range sits *inside* Telegram's by a margin on purpose. The
+#: deadline is computed here and evaluated by a server on the far side of a
+#: network round trip and a clock that is not this one — a window of exactly 30
+#: seconds can arrive as 29 and become permanent, which is the failure this
+#: check exists to prevent (raised by review, 2026-08-23).
+MIN_RESTRICTION_SECONDS = 60
+MAX_RESTRICTION_SECONDS = 365 * 24 * 60 * 60
+
+
+class RestrictUserInput(ModerationInput):
+    user: int | str = Field(description="The member whose rights are taken away.")
+    restrictions: Restrictions = Field(
+        description="Which rights to take away. At least one must be set."
+    )
+    duration_seconds: int = Field(
+        default=0,
+        description=(
+            "How long the restriction lasts, counted from the moment the plan is applied. "
+            f"0 means until an admin lifts it; otherwise between {MIN_RESTRICTION_SECONDS} "
+            f"seconds and {MAX_RESTRICTION_SECONDS} (365 days)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _duration_is_honest(self) -> RestrictUserInput:
+        if self.duration_seconds == 0:
+            return self
+        if not MIN_RESTRICTION_SECONDS <= self.duration_seconds <= MAX_RESTRICTION_SECONDS:
+            raise ValueError(
+                "duration_seconds must be 0 (until lifted) or between "
+                f"{MIN_RESTRICTION_SECONDS} and {MAX_RESTRICTION_SECONDS}; Telegram reads "
+                "anything outside that range as permanent"
+            )
+        return self
 
 
 class SetProfileInput(WriteInput):
@@ -808,6 +945,207 @@ async def plan_promote_admin(ctx: OperationContext, params: BaseModel) -> Plan:
     )
 
 
+# ---------------------------------------------------------------------------
+# moderation: the operations that take something away
+# ---------------------------------------------------------------------------
+#
+# The project could grant admin rights long before it could take any back,
+# which meant an agent could produce a state it was unable to reverse. These
+# five close that: ban has unban, restrict expires or is lifted by the same
+# unban, promote has demote, and kick is removal that was never a ban.
+#
+# Two things are said in every summary they build. *Who exactly* — a name, a
+# username and a numeric id for both the chat and the person, because "restrict
+# a user" is not a sentence anybody can approve. And, for the two that the
+# person on the receiving end cannot undo, that they cannot undo it.
+
+
+async def _moderation_target(
+    ctx: OperationContext, params: Any, *, action: str
+) -> tuple[str, Resolved, Resolved]:
+    """Resolve the chat and the member, checking both against the admin policy.
+
+    Both peers are judged, not just the chat: a rule that only guarded the
+    group would let any chat this account administers be used to act on
+    somebody who was never named in the configuration.
+    """
+    require_planning_profile(ctx, Capability.ADMIN, action=action)
+    async with open_writer(ctx, params.account) as (label, client):
+        chat = await resolve_peer(client, params.chat)
+        user = await resolve_peer(client, params.user)
+    require_peer(ctx, Capability.ADMIN, chat.ref, action=action)
+    require_peer(ctx, Capability.ADMIN, user.ref, action=action)
+    return label, chat, user
+
+
+def duration_phrase(seconds: int) -> str:
+    """A window a person reads at a glance, not a number of seconds."""
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = [
+        f"{value}{unit}"
+        for value, unit in ((days, "d"), (hours, "h"), (minutes, "m"), (secs, "s"))
+        if value
+    ]
+    return " ".join(parts) or "0s"
+
+
+def _require_ban_list(chat: Resolved, *, what: str) -> None:
+    """Refuse, while the plan is being written, what a basic group cannot do.
+
+    A basic group has no ban list and no per-member rights. Discovering that at
+    apply time would mean a person had already approved a summary describing
+    something Telegram was never going to do, so the type of the chat is checked
+    here — where the answer changes what gets written down rather than only what
+    happens.
+    """
+    if chat.is_channel:
+        return
+    raise InvalidInput(
+        f"{describe(chat)} is a basic group: Telegram keeps no ban list and no "
+        f"per-member rights there, so {what} does not exist for it",
+        suggestion="Plan chat.kick instead, or convert the group to a supergroup first.",
+    )
+
+
+async def plan_ban_user(ctx: OperationContext, params: BaseModel) -> Plan:
+    p = cast(BanUserInput, params)
+    label, chat, user = await _moderation_target(ctx, p, action="chat.ban")
+
+    if chat.is_channel:
+        effect = (
+            "  effect:  they are removed from the chat and cannot come back, "
+            "not through a link and not through a public username\n"
+        )
+    else:
+        # Said here rather than as a warning after the fact: a summary that
+        # promised a ban and produced a removal would have been approved on a
+        # description of something that did not happen.
+        effect = (
+            "  effect:  THIS IS A BASIC GROUP, which keeps no ban list — applying this "
+            "REMOVES them, and any member can add them straight back. Convert the group "
+            "to a supergroup first if you need the ban to hold.\n"
+        )
+    summary = (
+        f"Ban {describe(user)} from {describe(chat)} as {label}\n"
+        f"{effect}"
+        "  IRREVERSIBLE FOR THEM: the banned person cannot undo this. "
+        "Only an admin can, by planning `chat unban` for the same person.\n"
+        "  their existing messages are left in place"
+    )
+    return await _create(
+        ctx,
+        operation="chat.ban",
+        account=label,
+        params=p,
+        preconditions={"chat": peer_snapshot(chat), "user": peer_snapshot(user)},
+        summary=summary,
+    )
+
+
+async def plan_unban_user(ctx: OperationContext, params: BaseModel) -> Plan:
+    p = cast(UnbanUserInput, params)
+    label, chat, user = await _moderation_target(ctx, p, action="chat.unban")
+    _require_ban_list(chat, what="lifting a ban")
+
+    summary = (
+        f"Lift the ban and every restriction on {describe(user)} in {describe(chat)} as {label}\n"
+        "  effect:  they may join again and speak again\n"
+        "  note:    this does not add them back — they have to rejoin, or be invited"
+    )
+    return await _create(
+        ctx,
+        operation="chat.unban",
+        account=label,
+        params=p,
+        preconditions={"chat": peer_snapshot(chat), "user": peer_snapshot(user)},
+        summary=summary,
+    )
+
+
+async def plan_kick_user(ctx: OperationContext, params: BaseModel) -> Plan:
+    p = cast(KickUserInput, params)
+    label, chat, user = await _moderation_target(ctx, p, action="chat.kick")
+
+    summary = (
+        f"Remove {describe(user)} from {describe(chat)} as {label}, without banning them\n"
+        "  effect:  they leave the chat; nothing stops them returning through a "
+        "public username or a fresh invite\n"
+        "  IRREVERSIBLE FOR THEM: they cannot undo the removal — getting back in needs "
+        "the chat to be public, or somebody to invite them"
+    )
+    return await _create(
+        ctx,
+        operation="chat.kick",
+        account=label,
+        params=p,
+        preconditions={"chat": peer_snapshot(chat), "user": peer_snapshot(user)},
+        summary=summary,
+    )
+
+
+async def plan_restrict_user(ctx: OperationContext, params: BaseModel) -> Plan:
+    p = cast(RestrictUserInput, params)
+    label, chat, user = await _moderation_target(ctx, p, action="chat.restrict")
+    _require_ban_list(chat, what="restricting one member")
+
+    taken = "\n".join(
+        f"    - {RESTRICTION_LABELS[name]}"
+        for name, on in p.restrictions.model_dump().items()
+        if on
+    )
+    window = (
+        f"{duration_phrase(p.duration_seconds)}, counted from the moment the plan is applied"
+        if p.duration_seconds
+        else "until an admin lifts it (no expiry)"
+    )
+    summary = (
+        f"Restrict {describe(user)} in {describe(chat)} as {label}\n"
+        f"  they may no longer:\n{taken}\n"
+        f"  duration: {window}\n"
+        "  they stay in the chat and keep reading it; plan `chat unban` for the same "
+        "person to lift this early"
+    )
+    return await _create(
+        ctx,
+        operation="chat.restrict",
+        account=label,
+        params=p,
+        preconditions={
+            "chat": peer_snapshot(chat),
+            "user": peer_snapshot(user),
+            # Compared again at apply time, like a promotion's rights: a plan
+            # row edited between review and apply must not be applied against
+            # the summary somebody actually read.
+            "restrictions": p.restrictions.model_dump(),
+            "duration_seconds": p.duration_seconds,
+        },
+        summary=summary,
+    )
+
+
+async def plan_demote_admin(ctx: OperationContext, params: BaseModel) -> Plan:
+    p = cast(DemoteAdminInput, params)
+    label, chat, user = await _moderation_target(ctx, p, action="chat.demote")
+
+    summary = (
+        f"Take every admin right away from {describe(user)} in {describe(chat)} as {label}\n"
+        "  effect:  they keep their membership and lose all admin powers, "
+        "including their custom title\n"
+        "  reversible: plan `chat promote` for the same person to grant rights again\n"
+        "  note:    Telegram only lets an account demote admins it promoted itself"
+    )
+    return await _create(
+        ctx,
+        operation="chat.demote",
+        account=label,
+        params=p,
+        preconditions={"chat": peer_snapshot(chat), "user": peer_snapshot(user)},
+        summary=summary,
+    )
+
+
 async def plan_set_profile(ctx: OperationContext, params: BaseModel) -> Plan:
     p = cast(SetProfileInput, params)
     require_planning_profile(ctx, Capability.PROFILE, action="account.profile")
@@ -1049,6 +1387,69 @@ PROMOTE_ADMIN = _register(
     planner=plan_promote_admin,
 )
 
+BAN_USER = _register(
+    name="chat.ban",
+    cli=("chat", "ban"),
+    plan_tool="telegram_plan_ban_user",
+    summary="Plan banning one member from a chat.",
+    description=(
+        "Removes the person and blocks them from returning. The plan says so in as many "
+        "words: the person banned cannot undo it, only an admin can, through chat.unban."
+    ),
+    input_model=BanUserInput,
+    capability=Capability.ADMIN,
+    planner=plan_ban_user,
+)
+
+UNBAN_USER = _register(
+    name="chat.unban",
+    cli=("chat", "unban"),
+    plan_tool="telegram_plan_unban_user",
+    summary="Plan lifting a ban, and every restriction, on one member.",
+    description=(
+        "The undo for both chat.ban and chat.restrict — Telegram stores them in one set of "
+        "rights. It does not add the person back; they rejoin or are invited."
+    ),
+    input_model=UnbanUserInput,
+    capability=Capability.ADMIN,
+    planner=plan_unban_user,
+)
+
+KICK_USER = _register(
+    name="chat.kick",
+    cli=("chat", "kick"),
+    plan_tool="telegram_plan_kick_user",
+    summary="Plan removing one member without banning them.",
+    input_model=KickUserInput,
+    capability=Capability.ADMIN,
+    planner=plan_kick_user,
+)
+
+RESTRICT_USER = _register(
+    name="chat.restrict",
+    cli=("chat", "restrict"),
+    plan_tool="telegram_plan_restrict_user",
+    summary="Plan taking specific rights away from one member, with a duration.",
+    description=(
+        "Each right is named in the plan, and so is how long it lasts — a preview that said "
+        "only 'restrict a user' would not be something a person could decide on."
+    ),
+    input_model=RestrictUserInput,
+    capability=Capability.ADMIN,
+    planner=plan_restrict_user,
+)
+
+DEMOTE_ADMIN = _register(
+    name="chat.demote",
+    cli=("chat", "demote"),
+    plan_tool="telegram_plan_demote_admin",
+    summary="Plan taking every admin right away from one member.",
+    description="The undo for chat.promote. Membership is untouched; the rights and rank go.",
+    input_model=DemoteAdminInput,
+    capability=Capability.ADMIN,
+    planner=plan_demote_admin,
+)
+
 SET_PROFILE = _register(
     name="account.profile",
     cli=("account", "profile"),
@@ -1073,5 +1474,10 @@ WRITE_OPERATIONS: tuple[Operation, ...] = (
     CREATE_GROUP,
     INVITE_USER,
     PROMOTE_ADMIN,
+    BAN_USER,
+    UNBAN_USER,
+    KICK_USER,
+    RESTRICT_USER,
+    DEMOTE_ADMIN,
     SET_PROFILE,
 )

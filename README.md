@@ -53,6 +53,7 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai scheduled` | What is queued to be sent to a chat later, and when |
 | `tg-ai account sessions` | Which devices and apps this account is signed in on — and whether one of them isn't yours |
 | `tg-ai message send` / `chat join` / `chat promote` / … | Validate and save an intent — send, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
+| `tg-ai chat ban` / `unban` / `kick` / `restrict` / `demote` | Moderation, planned the same way: one member per plan, and the preview says who, where, which rights and for how long |
 | `tg-ai plan list` / `plan show <id>` | See what's waiting for a decision, and exactly what applying it would do |
 | `tg-ai plan apply <id>` | Carry out exactly what a saved plan describes |
 | `tg-ai plan reject <id>` | Decline a pending plan |
@@ -222,7 +223,7 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
 
 ## MCP tools
 
-Twenty-eight tools: sixteen read tools, and twelve plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
+Thirty-two tools: fifteen that run immediately, and seventeen plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
 telegram_fleet             telegram_plan_send_message     telegram_plan_join_chat
@@ -231,9 +232,9 @@ telegram_chat_read         telegram_plan_edit_message     telegram_plan_create_g
 telegram_inbox             telegram_plan_delete_message   telegram_plan_invite_user
 telegram_search            telegram_plan_forward_message  telegram_plan_promote_admin
 telegram_whois             telegram_plan_mark_read        telegram_plan_set_profile
-telegram_chat_members
-telegram_media_fetch
-telegram_message_reactions
+telegram_chat_members      telegram_plan_ban_user         telegram_plan_restrict_user
+telegram_media_fetch       telegram_plan_unban_user       telegram_plan_demote_admin
+telegram_message_reactions telegram_plan_kick_user
 telegram_chat_topics
 telegram_watch
 telegram_drafts
@@ -244,6 +245,8 @@ telegram_folders
 ```
 
 `telegram_folders` reads the chat folders the user already arranged by hand, and `telegram_chats` / `telegram_inbox` take a `folder` argument that narrows a listing to one. A folder is the user's own sorting, never a permission: the filter runs after the policy, so a folder that names a chat this configuration may not enumerate does not make it appear.
+
+The five moderation tools exist so that every rights change has an undo. Granting admin rights was possible long before taking any back, which meant an agent could produce a state it had no way to reverse: `plan_ban_user` is paired with `plan_unban_user`, `plan_promote_admin` with `plan_demote_admin`, and `plan_restrict_user` either expires on its own or is lifted by the same unban — Telegram keeps a ban and a restriction in one set of rights. **One member per plan**, never a list: banning six people behind a single approval is exactly the blast radius the review step exists to bound. The preview names the person, the chat, each right being taken and how long it lasts, and for the two nobody on the receiving end can reverse — a ban and a kick — it says so in as many words.
 
 `tg-ai account add` and `tg-ai account login` are absent from this list on purpose, and the registry refuses to publish them: signing in asks a person for the code Telegram sent to their phone, and enrolling an account widens the very fleet every allowlist is written against.
 

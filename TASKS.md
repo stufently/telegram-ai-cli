@@ -133,15 +133,38 @@ is
       topic page could be derived from the topic instead of the chat — at the
       cost of one extra `messages.getForumTopicsByID` call.
 
+- [ ] **A ban leaves the banned person's messages in place.** Telegram can
+      delete a member's whole history along with the ban
+      (`channels.deleteParticipantHistory`), which is what a moderator usually
+      wants for a spammer. It is deliberately not wired up: it deletes other
+      people's messages, which `message.delete` refuses to do for the same
+      reason, and a plan whose summary said "ban" while silently erasing a
+      hundred messages would be the opposite of a reviewable preview. If it is
+      added it needs to be its own flag, spelled out in the summary with the
+      number of messages it would remove.
+
+- [ ] **Nothing reports the moderation state a plan is about to change.**
+      `chat.members` lists participants and admins, but there is no way to ask
+      "who is banned here", "what is this person already restricted from" or
+      "when does their restriction expire" — so an unban is planned against a
+      ban nobody verified exists, and a restriction cannot be diffed against the
+      one already in force. Telegram answers all three with
+      `channels.getParticipant` and `ChannelParticipantsBanned`; the question is
+      whether that belongs in `chat.members` as a filter or in a read of its own.
+
 ## Known gaps in the CLI surface
 
 - [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in
       `cli.py` maps a `list[int]` to a single `int` (no `multiple=True`) and a
       nested model to a string, so `message delete` / `message forward`
-      (`message_ids`), `chat create` (`users`) and `chat promote` (`rights`)
-      cannot be planned from the terminal at all — only through their MCP
-      tools. Either teach the generator repeated options and a JSON form, or
-      say so in `--help` rather than only in `docs/operations.md`.
+      (`message_ids`), `chat create` (`users`), `chat promote` (`rights`) and
+      `chat restrict` (`restrictions`) cannot be planned from the terminal at
+      all — only through their MCP tools. Either teach the generator repeated
+      options and a JSON form, or say so in `--help` rather than only in
+      `docs/operations.md`. The moderation operations make this sharper: `chat
+      ban`, `chat unban`, `chat kick` and `chat demote` *are* usable from a
+      terminal, so `chat restrict` is now the one moderation action a person
+      cannot plan without an MCP client.
 - [ ] **`login_and_register` writes the account row before it takes the session
       lock** (`accounts/login.py`), so a login that then fails on
       `SessionLocked` has already changed `phone`, `source`, `session_path` and

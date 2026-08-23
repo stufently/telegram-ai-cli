@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from .envelope import Envelope, Meta
@@ -82,7 +83,28 @@ _LIMIT_KINDS: dict[str, LimitKind] = {
     "chat.create": LimitKind.ADMIN,
     "chat.invite": LimitKind.ADMIN,
     "chat.promote": LimitKind.ADMIN,
+    # Moderation draws on the same budget as any other admin act. A ceiling that
+    # counted promotions but not bans would leave the destructive half of the
+    # pair unlimited.
+    "chat.ban": LimitKind.ADMIN,
+    "chat.unban": LimitKind.ADMIN,
+    "chat.kick": LimitKind.ADMIN,
+    "chat.restrict": LimitKind.ADMIN,
+    "chat.demote": LimitKind.ADMIN,
+    # Nobody but the account owner can observe these, so they are not sends —
+    # but they are still requests to Telegram, and an unbudgeted operation is a
+    # loop nothing stops.
+    "chat.archive": LimitKind.ADMIN,
+    "chat.mute": LimitKind.ADMIN,
     "account.profile": LimitKind.ADMIN,
+    # A chat's identity is an admin act on that chat, and the block list is an
+    # admin act on a person; both draw on the budget that bounds how much of
+    # either can happen in one window.
+    "chat.set_title": LimitKind.ADMIN,
+    "chat.set_about": LimitKind.ADMIN,
+    "chat.set_photo": LimitKind.ADMIN,
+    "account.block": LimitKind.ADMIN,
+    "account.unblock": LimitKind.ADMIN,
 }
 
 
@@ -394,7 +416,15 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 warnings=warnings,
             )
 
-        case "chat.invite" | "chat.promote":
+        case (
+            "chat.invite"
+            | "chat.promote"
+            | "chat.ban"
+            | "chat.unban"
+            | "chat.kick"
+            | "chat.restrict"
+            | "chat.demote"
+        ):
             require_planning_profile(ctx, Capability.ADMIN, action=action)
             chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
             user = await resolve_peer(client, params.user)  # type: ignore[attr-defined]
@@ -407,6 +437,16 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 if pre.get("rights") != asked:
                     raise PlanPreconditionFailed(
                         "the rights recorded in the plan differ from the ones being applied"
+                    )
+            if operation == "chat.restrict":
+                # Both halves of what was reviewed: which rights go, and for how
+                # long. A duration silently widened between review and apply is
+                # the same class of mistake as a changed right.
+                taken = params.restrictions.model_dump()  # type: ignore[attr-defined]
+                duration = params.duration_seconds  # type: ignore[attr-defined]
+                if pre.get("restrictions") != taken or pre.get("duration_seconds") != duration:
+                    raise PlanPreconditionFailed(
+                        "the restrictions recorded in the plan differ from the ones being applied"
                     )
             return _Prepared(
                 limit_target=str(chat.ref.peer_id),
@@ -611,6 +651,11 @@ async def _execute(
                             pin_messages=rights.pin_messages,
                             add_admins=rights.add_admins,
                             manage_call=rights.manage_call,
+                            # Was accepted in the input model and then dropped
+                            # here, so a promotion that granted it silently did
+                            # not — the plan said one thing and Telegram was
+                            # told another.
+                            manage_topics=rights.manage_topics,
                             # Never anonymous: an admin action nobody can
                             # attribute defeats the log this project keeps.
                             anonymous=False,
@@ -630,6 +675,179 @@ async def _execute(
                 )
             return {"promoted": True}, warnings
 
+        case "chat.ban":
+            chat_peer, user_peer = await _member_peers(client, prepared)
+            if isinstance(chat_peer, types.InputPeerChannel):
+                await client(
+                    functions.channels.EditBannedRequest(
+                        channel=chat_peer,
+                        participant=user_peer,
+                        # No until_date: a ban with no end is what the plan said,
+                        # and Telegram reads a missing date as "forever".
+                        banned_rights=types.ChatBannedRights(until_date=None, view_messages=True),
+                    )
+                )
+                return {"banned": True}, warnings
+            await client(
+                functions.messages.DeleteChatUserRequest(
+                    chat_id=chat_peer.chat_id, user_id=user_peer
+                )
+            )
+            # A basic group keeps no ban list at all. Reporting "banned" here
+            # would tell a person the door is locked when any member can open it.
+            warnings.append(
+                "this is a basic group, which keeps no ban list: the person was removed, "
+                "and any member can add them back"
+            )
+            return {"banned": False, "removed": True}, warnings
+
+        case "chat.unban":
+            chat_peer, user_peer = await _member_peers(client, prepared)
+            if not isinstance(chat_peer, types.InputPeerChannel):
+                # Refused before any request leaves, so the applier's own
+                # bookkeeping treats it as the refusal it is rather than as an
+                # attempt whose outcome nobody knows.
+                raise PlanPreconditionFailed(
+                    "this is a basic group: it keeps no ban list, so there is nothing to lift",
+                    suggestion="Invite the person back instead, or convert the group first.",
+                )
+            await client(
+                functions.channels.EditBannedRequest(
+                    channel=chat_peer,
+                    participant=user_peer,
+                    # Every flag off: the one request that clears a ban also
+                    # clears every restriction, because Telegram keeps them in
+                    # the same object.
+                    banned_rights=types.ChatBannedRights(until_date=None),
+                )
+            )
+            return {"unbanned": True}, warnings
+
+        case "chat.kick":
+            chat_peer, user_peer = await _member_peers(client, prepared)
+            if isinstance(chat_peer, types.InputPeerChannel):
+                # A supergroup has no "remove without banning": the documented
+                # way is to ban and immediately lift it. The second request is
+                # the whole difference between a kick and a ban, so it is issued
+                # here explicitly — if it fails, the person is left banned and
+                # the failure says so rather than reporting a kick.
+                await client(
+                    functions.channels.EditBannedRequest(
+                        channel=chat_peer,
+                        participant=user_peer,
+                        banned_rights=types.ChatBannedRights(until_date=None, view_messages=True),
+                    )
+                )
+                try:
+                    await client(
+                        functions.channels.EditBannedRequest(
+                            channel=chat_peer,
+                            participant=user_peer,
+                            banned_rights=types.ChatBannedRights(until_date=None),
+                        )
+                    )
+                except Exception as exc:
+                    # The half-done state this operation is built out of, and the
+                    # one case the applier's error taxonomy would otherwise get
+                    # backwards: a FloodWaitError here is in the "no effect"
+                    # whitelist, so the plan would be closed as failed, the slot
+                    # refunded — and the person would still be banned. Raised as
+                    # an unknown outcome instead, which keeps the budget spent and
+                    # tells a person exactly what to go and look at.
+                    raise PlanUnknownOutcome(
+                        "the ban went through but lifting it did not: the person is "
+                        f"BANNED, not kicked ({type(exc).__name__}: "
+                        f"{sanitize_line(str(exc), limit=200)})",
+                        suggestion=(
+                            "Check the chat, then plan chat.unban for the same person "
+                            "to finish what this kick started."
+                        ),
+                    ) from exc
+                return {"removed": True}, warnings
+            await client(
+                functions.messages.DeleteChatUserRequest(
+                    chat_id=chat_peer.chat_id, user_id=user_peer
+                )
+            )
+            return {"removed": True}, warnings
+
+        case "chat.restrict":
+            chat_peer, user_peer = await _member_peers(client, prepared)
+            if not isinstance(chat_peer, types.InputPeerChannel):
+                raise PlanPreconditionFailed(
+                    "this is a basic group: Telegram keeps no per-member rights there",
+                    suggestion="Plan chat.kick instead, or convert the group to a supergroup.",
+                )
+            taken = params.restrictions  # type: ignore[attr-defined]
+            duration = params.duration_seconds  # type: ignore[attr-defined]
+            # Dated here, not at planning time: a plan can wait in the review
+            # queue for hours, and an absolute date written then would already
+            # be in the past by the time somebody approves it.
+            until = datetime.now(UTC) + timedelta(seconds=duration) if duration else None
+            await client(
+                functions.channels.EditBannedRequest(
+                    channel=chat_peer,
+                    participant=user_peer,
+                    banned_rights=types.ChatBannedRights(
+                        until_date=until,
+                        # Emphatically not a ban: they stay and keep reading.
+                        view_messages=False,
+                        send_messages=taken.send_messages,
+                        # One asked-for flag, four of Telegram's: "no media"
+                        # that still allowed GIFs, games and inline results
+                        # would be a preview nobody could rely on.
+                        send_media=taken.send_media,
+                        send_gifs=taken.send_media,
+                        send_games=taken.send_media,
+                        send_inline=taken.send_media,
+                        send_stickers=taken.send_stickers,
+                        send_polls=taken.send_polls,
+                        embed_links=taken.embed_links,
+                        invite_users=taken.invite_users,
+                        pin_messages=taken.pin_messages,
+                        change_info=taken.change_info,
+                    ),
+                )
+            )
+            return {
+                "restricted": True,
+                "until": until.isoformat() if until else None,
+            }, warnings
+
+        case "chat.demote":
+            chat_peer, user_peer = await _member_peers(client, prepared)
+            if isinstance(chat_peer, types.InputPeerChannel):
+                await client(
+                    functions.channels.EditAdminRequest(
+                        channel=chat_peer,
+                        user_id=user_peer,
+                        # Every right off is how Telegram spells "not an admin".
+                        admin_rights=types.ChatAdminRights(
+                            change_info=False,
+                            post_messages=False,
+                            edit_messages=False,
+                            delete_messages=False,
+                            ban_users=False,
+                            invite_users=False,
+                            pin_messages=False,
+                            add_admins=False,
+                            manage_call=False,
+                            manage_topics=False,
+                            anonymous=False,
+                        ),
+                        # Clearing the rank as well: a custom title left behind
+                        # still says "moderator" next to somebody who is not one.
+                        rank="",
+                    )
+                )
+                return {"demoted": True}, warnings
+            await client(
+                functions.messages.EditChatAdminRequest(
+                    chat_id=chat_peer.chat_id, user_id=user_peer, is_admin=False
+                )
+            )
+            return {"demoted": True}, warnings
+
         case "account.profile":
             fields = {
                 name: value
@@ -644,6 +862,19 @@ async def _execute(
             return {"changed": sorted(fields)}, warnings
 
     raise InvalidInput(f"no applier for operation {sanitize_line(operation, limit=64)}")
+
+
+async def _member_peers(client: Any, prepared: _Prepared) -> tuple[Any, Any]:
+    """The two input peers every moderation RPC addresses.
+
+    Telegram takes a peer plus its access hash, not a bare id, and the pair is
+    fetched again here rather than carried from planning time: hashes are
+    re-issued, and a stale one fails the request rather than acting on the
+    wrong person.
+    """
+    chat_peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+    user_peer = await client.get_input_entity(prepared.peers["user"].ref.peer_id)
+    return chat_peer, user_peer
 
 
 def _missing_invitees(result: Any) -> list[int]:

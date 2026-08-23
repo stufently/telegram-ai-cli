@@ -793,7 +793,7 @@ configuration, the plan database, `~/.bashrc` or the session file itself.
 
 ## Plan operations
 
-Twelve. Each one **validates and records an intention and returns a `plan_id`**;
+Seventeen. Each one **validates and records an intention and returns a `plan_id`**;
 nothing reaches Telegram until a person runs `tg-ai plan apply <id>`. Over MCP
 they are `telegram_plan_*` tools. There is no tool that applies a plan — see
 [Safety](../README.md#safety) for what that does and does not promise.
@@ -814,6 +814,11 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | `chat.create` | `tg-ai chat create` | `telegram_plan_create_group` | `admin` | `title`\*, `about`="", `users` (list) |
 | `chat.invite` | `tg-ai chat invite` | `telegram_plan_invite_user` | `admin` | `chat`\*, `user`\* |
 | `chat.promote` | `tg-ai chat promote` | `telegram_plan_promote_admin` | `admin` | `chat`\*, `user`\*, `rights`\* (object), `rank`="" |
+| `chat.ban` | `tg-ai chat ban` | `telegram_plan_ban_user` | `admin` | `chat`\*, `user`\* |
+| `chat.unban` | `tg-ai chat unban` | `telegram_plan_unban_user` | `admin` | `chat`\*, `user`\* |
+| `chat.kick` | `tg-ai chat kick` | `telegram_plan_kick_user` | `admin` | `chat`\*, `user`\* |
+| `chat.restrict` | `tg-ai chat restrict` | `telegram_plan_restrict_user` | `admin` | `chat`\*, `user`\*, `restrictions`\* (object), `duration_seconds`=0 |
+| `chat.demote` | `tg-ai chat demote` | `telegram_plan_demote_admin` | `admin` | `chat`\*, `user`\* |
 | `account.profile` | `tg-ai account profile` | `telegram_plan_set_profile` | `profile` | at least one of `first_name`, `last_name`, `about` |
 
 \* required.
@@ -832,11 +837,60 @@ Notes that are not obvious from the table:
   `manage_call`, `manage_topics`, `add_admins`), all defaulting to off, at least
   one required. `anonymous` is deliberately absent: an admin action nobody can
   attribute defeats the audit log this project keeps.
+- **Moderation is five operations, and each one has an undo.** Handing out admin
+  rights was possible long before taking any back, so an agent could reach a
+  state it was unable to reverse. `chat.ban` is undone by `chat.unban`,
+  `chat.promote` by `chat.demote`, and `chat.restrict` either expires by itself
+  or is lifted by the same `chat.unban` — Telegram keeps a ban and a restriction
+  in one `ChatBannedRights` object, so one request clears both.
+- **One member per plan.** Every moderation input takes a single `user`, never a
+  list. Banning six people behind one approval is the blast radius the review
+  step exists to bound.
+- **A ban and a kick are marked irreversible in the preview**, because the
+  person on the receiving end cannot undo either: only an admin can lift a ban,
+  and getting back in after a kick needs a public chat or a fresh invite. The
+  summary also names the chat and the person by title, `@username` and numeric
+  id — "restrict a user" is not a sentence anybody can approve.
+- **`chat.restrict`'s `restrictions` is an object of prohibitions**, named the
+  way Telegram names them (`send_messages`, `send_media`, `send_stickers`,
+  `send_polls`, `embed_links`, `invite_users`, `pin_messages`, `change_info`),
+  all defaulting to off and at least one required. `send_media` sets four of
+  Telegram's flags at once — media, GIFs, games and inline results — because a
+  "no media" that still allowed GIFs would be a preview nobody could rely on.
+  `view_messages` is deliberately absent: taking *that* away is a ban, and a ban
+  is its own operation with its own warning rather than a flag inside a rights
+  object.
+- **`duration_seconds` is a duration, not a date, and it is counted from the
+  moment the plan is applied.** A plan can wait in the review queue for hours,
+  and an absolute date recorded at planning time would already be in the past.
+  `0` means "until an admin lifts it"; anything else must be between 60 seconds
+  and 365 days. Telegram silently reads a shorter or longer window as permanent,
+  and the accepted range sits inside its by a margin on purpose: the deadline is
+  computed here and evaluated by a server one round trip and one clock away, so
+  a window of exactly the minimum can arrive under it and become permanent.
+- **What a basic group cannot do is refused, not faked.** A basic group keeps no
+  ban list and no per-member rights, so `chat.unban` and `chat.restrict` are
+  refused *while the plan is written* — a doomed plan should not reach the
+  review queue — and again at apply time, in case the chat changed underneath.
+  `chat.ban` is allowed there but says on the approval screen that it only
+  removes the person and that any member can add them straight back; the applied
+  outcome reports `banned: false`, `removed: true` with the same warning.
+  `chat.kick` and `chat.demote` work in both kinds of chat.
+- **A kick in a supergroup is a ban that is immediately lifted**, which is the
+  only way Telegram offers. Both requests are issued explicitly, and a failure
+  of the *second* one is reported as an unknown outcome saying the person is
+  banned rather than kicked — with the rate-limit slot kept. Left to the general
+  error handling, a flood wait there counts as "no effect", which would refund
+  the budget and close the plan as failed while the ban stood.
+- **`chat.demote` only works on admins this account promoted.** That is
+  Telegram's rule, not this project's, and it is stated in the plan summary so
+  the refusal is not a surprise at apply time.
 - **Arguments that are lists or objects cannot be expressed by the generated
   CLI yet.** Click options are derived from the input model, and the generator
   maps a list to a single value and a nested object to a string — so
-  `message.delete`, `message.forward` (`message_ids`), `chat.create` (`users`)
-  and `chat.promote` (`rights`) can be *planned* only through their MCP tools
+  `message.delete`, `message.forward` (`message_ids`), `chat.create` (`users`),
+  `chat.promote` (`rights`) and `chat.restrict` (`restrictions`) can be
+  *planned* only through their MCP tools
   today, though the resulting plan is applied from the terminal like any other.
   Tracked in [`TASKS.md`](../TASKS.md).
 - **`account.profile` needs `safety.write.profile_enabled`** on top of the
