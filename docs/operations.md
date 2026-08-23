@@ -1031,12 +1031,12 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 
 | Operation | CLI | Plan tool | Capability | Arguments |
 | --- | --- | --- | --- | --- |
-| `message.send` | `tg-ai message send` | `telegram_plan_send_message` | `send` | `chat`\*, `text`\*, `silent`=false, `link_preview`=true |
-| `message.reply` | `tg-ai message reply` | `telegram_plan_reply_message` | `send` | `chat`\*, `reply_to_message_id`\*, `text`\*, `silent`=false, `link_preview`=true |
-| `message.send_file` | `tg-ai message send-file` | `telegram_plan_send_file` | `send` | `chat`\*, `path`\*, `caption`="", `reply_to_message_id`, `as_document`=false, `silent`=false |
+| `message.send` | `tg-ai message send` | `telegram_plan_send_message` | `send` | `chat`\*, `text`\*, `silent`=false, `link_preview`=true, `allow_duplicate`=false |
+| `message.reply` | `tg-ai message reply` | `telegram_plan_reply_message` | `send` | `chat`\*, `reply_to_message_id`\*, `text`\*, `silent`=false, `link_preview`=true, `allow_duplicate`=false |
+| `message.send_file` | `tg-ai message send-file` | `telegram_plan_send_file` | `send` | `chat`\*, `path`\*, `caption`="", `reply_to_message_id`, `as_document`=false, `silent`=false, `allow_duplicate`=false |
 | `message.edit` | `tg-ai message edit` | `telegram_plan_edit_message` | `send` | `chat`\*, `message_id`\*, `text`\* |
 | `message.delete` | `tg-ai message delete` | `telegram_plan_delete_message` | `send` | `chat`\*, `message_ids`\* (list), `revoke`=true |
-| `message.forward` | `tg-ai message forward` | `telegram_plan_forward_message` | `send` | `source_chat`\*, `message_ids`\*, `destination_chat`\*, `silent`=false, `drop_author`=false |
+| `message.forward` | `tg-ai message forward` | `telegram_plan_forward_message` | `send` | `source_chat`\*, `message_ids`\*, `destination_chat`\*, `silent`=false, `drop_author`=false, `allow_duplicate`=false |
 | `message.schedule` | `tg-ai message schedule` | `telegram_plan_schedule_message` | `send` | `chat`\*, `text`\*, `at` (ISO-8601 **with** a UTC offset) *or* `when_online`=false, `silent`=false, `link_preview`=true |
 | `chat.mark_read` | `tg-ai chat mark-read` | `telegram_plan_mark_read` | `send` | `chat`\*, `max_message_id` |
 | `chat.archive` | `tg-ai chat archive` | `telegram_plan_archive_chat` | `send` | `chat`\*, `archived`=true |
@@ -1066,6 +1066,23 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 
 Notes that are not obvious from the table:
 
+- **The same message is not sent to the same peer twice.** Applying a plan
+  writes a fingerprint of what went out — account, operation, numeric peer id,
+  the words with cosmetic whitespace normalised away, the sha256 of any
+  attachment, and the choices that change how it renders (reply target, link
+  preview, photo-or-document and its file name, forward attribution) — to
+  `state.db`, and the applier consults it after verification and
+  before the rate-limit slot is reserved. An identical send inside
+  `ledger.window_seconds` (six hours by default) is **refused** with
+  `DUPLICATE_OUTBOUND`, naming when the earlier one was applied and which plan
+  did it. Refused rather than skipped: a caller that cannot tell "sent" from
+  "quietly didn't" is worse off than one that gets an error. The four operations
+  it covers are the ones that put new words in a chat — `message.send`,
+  `message.reply`, `message.send_file` and `message.forward` — and each takes
+  `allow_duplicate` for the times a repeat is meant. That flag is a field on the
+  plan rather than a switch at apply time, so the preview a human reads says
+  `DELIBERATE REPEAT`; the reasoning and the window are in the
+  [configuration reference](configuration.md#ledger).
 - **`message.edit` and `message.delete` refuse other people's messages.**
   Removing somebody else's message is a moderation action with a different blast
   radius, and it is out of scope for v0.1 — the refusal is recorded in the audit

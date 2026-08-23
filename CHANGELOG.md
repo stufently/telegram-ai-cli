@@ -150,6 +150,43 @@ before that, breaking changes can happen on any `0.x` release.
   workflow checks the marker is in the wheel, because it is a zero-byte file
   that nothing else would notice the absence of.
 
+- **A ledger of what has already been sent, so it is not sent again.** The audit
+  log records what happened; nothing stopped it happening twice — and the failure
+  worth stopping is not a race but an *amnesia*: an agent in a new session, with
+  no memory of the last one, plans and applies a message it already sent, and the
+  person on the other end sees the same words twice with no way to tell which run
+  produced them. Applying a plan now writes a fingerprint of the action to
+  `state.db` (the same file as the plans and the rate-limit history, not a third
+  store) and refuses an identical one inside `ledger.window_seconds`. The
+  fingerprint is what the *recipient* sees: the account, the operation, the
+  numeric peer id — re-resolved at apply time, because a handle can change hands
+  — the words with cosmetic whitespace normalised away, and the sha256 of any
+  attachment, reusing the digest `resolve_outbound` already computes rather than
+  hashing the bytes a second way — plus the choices that change how any of it
+  renders: the reply target, the link preview, photo-or-document and its file
+  name, and a forward's attribution. Case is deliberately left alone, line breaks
+  survive normalisation because Telegram renders them, and `silent` is left out
+  because it decides whether a phone chimes, not what the message says. **Refused, not skipped**: a caller that cannot
+  tell "sent" from "quietly didn't" reports success for a message nobody
+  received, so the error (`DUPLICATE_OUTBOUND`) names when the identical action
+  was applied and which plan did it, and names the chat by numeric id because
+  `Envelope.failure` does not defang a chat title. The check sits after
+  verification and before the rate-limit reservation — it needs the re-resolved
+  peer and the re-digested file, and a refusal that never reached Telegram must
+  not spend a slot. The row is written beside the audit attempt, before the RPC,
+  dated forward to the moment the send completed once that is known — an upload
+  takes minutes, and a window counted from the start of one would expire before
+  the file had finished arriving — and dropped again only where the slot is
+  refunded: an unknown outcome keeps both, and so does a bookkeeping failure
+  *after* a completed RPC, which the applier used to mistake for "nothing left
+  the machine" (it refunded the slot for that case too, which is fixed here). Repeating on purpose is `allow_duplicate` on `message.send`,
+  `message.reply`, `message.send_file` and `message.forward` — a field on the
+  plan rather than a switch at apply time, so the preview says `DELIBERATE
+  REPEAT` and the person approving knows what they are approving. Window default
+  six hours, `0` to turn it off; the reasoning is in `docs/configuration.md`.
+  Not an idempotency framework: two *different* plans applied in the same instant
+  can still both pass, and the module says so.
+
 - `tg-ai message schedule` / `telegram_plan_schedule_message` — plan a message for a
   given time, or for the moment the other person is next online. The point is not
   that it goes out later: once the plan is applied the message sits in **Telegram's

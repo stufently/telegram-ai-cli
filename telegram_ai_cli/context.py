@@ -1,7 +1,7 @@
 """What every operation is handed, and how it gets built.
 
 One object carries the policy kernel, the plan store, the rate limiter, the
-audit log and the account fleet. Operations receive it rather than reaching for
+audit log, the outbound ledger and the account fleet. Operations receive it rather than reaching for
 globals, which is what makes them testable without a Telegram account: a test
 builds a context over a temporary directory and an in-memory database.
 
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal, Self
 from .audit import AuditLog
 from .config import Settings, load_settings
 from .db import connect
+from .ledger import OutboundLedger
 from .limits import LimitStore
 from .plans import PlanStore
 from .safety import SafetyKernel
@@ -41,7 +42,16 @@ class OperationContext:
     audit: AuditLog
     actor: Actor
     accounts: AccountRegistry | None = None
+    #: What has already been sent. Optional in the signature only so that a test
+    #: can build a context by hand without naming it; ``__post_init__`` derives
+    #: one from the connection whenever there is a database at all, and the
+    #: applier refuses rather than proceeding if it ends up without one.
+    ledger: OutboundLedger | None = None
     _conn: sqlite3.Connection | None = None
+
+    def __post_init__(self) -> None:
+        if self.ledger is None and self._conn is not None:
+            self.ledger = OutboundLedger(self._conn, self.settings.ledger)
 
     @classmethod
     def build(
@@ -73,6 +83,7 @@ class OperationContext:
             plans=PlanStore(conn, settings.plans, box),
             limits=LimitStore(conn, settings.limits),
             audit=AuditLog(settings.paths.audit_log, settings.audit),
+            ledger=OutboundLedger(conn, settings.ledger),
             actor=actor,
             accounts=AccountRegistry.from_connection(conn, settings, box),
             _conn=conn,

@@ -1,4 +1,4 @@
-"""One SQLite file holds plans and rate-limit history.
+"""One SQLite file holds plans, rate-limit history and the outbound ledger.
 
 WAL so a reader never blocks the writer, and ``BEGIN IMMEDIATE`` for anything
 that reads a value and then writes based on it. SQLite's default deferred
@@ -66,6 +66,30 @@ CREATE TABLE IF NOT EXISTS limit_events (
     committed  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS limit_events_idx ON limit_events(kind, created_at);
+
+-- What has already gone out, so that it does not go out twice. One row per
+-- applied outbound action, keyed by a fingerprint of the thing the recipient
+-- sees (see ``telegram_ai_cli/ledger.py``).
+--
+-- The fingerprint is deliberately *not* unique: a repeat somebody approved on
+-- purpose is a second send, and the accidental one after it still has to be
+-- caught. It lives in this file rather than in a third database because a
+-- duplicate check that could disagree with the plan history it is protecting
+-- would be worse than no check at all.
+-- ``sent_at`` is written before the request leaves — so a crash mid-send still
+-- counts as a send — and moved forward to the moment it completed once that is
+-- known. An upload takes minutes, and a window measured from the start of one
+-- would expire before the file had finished arriving.
+CREATE TABLE IF NOT EXISTS outbound_ledger (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL,
+    account     TEXT NOT NULL,
+    operation   TEXT NOT NULL,
+    peer_id     INTEGER,
+    plan_id     TEXT NOT NULL,
+    sent_at     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS outbound_ledger_idx ON outbound_ledger(fingerprint, sent_at);
 """
 
 

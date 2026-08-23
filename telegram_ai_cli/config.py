@@ -154,6 +154,24 @@ class PlansConfig(BaseModel):
     encrypt_bodies: bool = True
 
 
+class LedgerConfig(BaseModel):
+    """How long an outbound action is remembered, so it is not repeated.
+
+    The window is the whole setting. The duplicate this catches is a *re-run* —
+    a restarted process, a retried script, an agent in a fresh session with no
+    memory of the last one — and those happen within hours. A message on a daily
+    rhythm is a legitimate repeat, so six hours is chosen to sit well clear of
+    one even with hours of drift: a longer window trades a rare catch for routine
+    false refusals, and every false refusal teaches whoever hits it to set
+    ``allow_duplicate`` by reflex, which is how the check stops working.
+
+    Zero turns the check off. Said as a number rather than as a second boolean,
+    because two switches that can disagree is one more state than this needs.
+    """
+
+    window_seconds: int = Field(default=6 * 60 * 60, ge=0)
+
+
 class DownloadConfig(BaseModel):
     """Media lands in a server-chosen location, never a caller-chosen one."""
 
@@ -256,6 +274,7 @@ class Settings(BaseSettings):
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     plans: PlansConfig = Field(default_factory=PlansConfig)
+    ledger: LedgerConfig = Field(default_factory=LedgerConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
     upload: UploadConfig = Field(default_factory=UploadConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)

@@ -17,13 +17,20 @@ where it is because the alternative fails in a specific way:
    question about the world as it was. Usernames get released and re-registered,
    messages get deleted, an allowlist gets edited. So the target is resolved
    again and compared against the snapshot in the plan.
-3. **Reserve the rate-limit slot before the network call.** Checking a counter
+3. **Refuse a duplicate.** The claim above stops one plan being applied twice;
+   it says nothing about *two* plans carrying the same message, which is what a
+   fresh session with no memory of the last one produces. The check sits here —
+   after verification, because it needs the re-resolved peer id and the
+   re-digested file, and before the reservation, because a refusal that never
+   reached Telegram must not spend a slot meant for requests that did.
+4. **Reserve the rate-limit slot before the network call.** Checking a counter
    and incrementing it after the ``await`` lets concurrent callers all read the
    same number and all proceed; a cap of five becomes eight.
-4. **Write the audit attempt before the RPC.** A log written only after success
-   loses exactly the case it exists for: the send that went out and then the
-   process died.
-5. **Then, and only then, the RPC.**
+5. **Write the audit attempt, and the ledger row, before the RPC.** A log
+   written only after success loses exactly the case it exists for: the send
+   that went out and then the process died. The ledger row is written there for
+   the same reason and dropped again only where the slot is refunded.
+6. **Then, and only then, the RPC.**
 
 **A timeout after the request left is not a failure.** It is
 ``unknown_outcome``: the slot stays consumed, nothing is retried, and a person
@@ -42,6 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from .envelope import Envelope, Meta
 from .errors import (
+    DuplicateOutbound,
     ForwardsRestricted,
     InvalidInput,
     PlanPreconditionFailed,
@@ -51,6 +59,7 @@ from .errors import (
     TelegramAIError,
     TelegramError,
 )
+from .ledger import LEDGERED_OPERATIONS, LedgerEntry, fingerprint
 from .limits import LimitKind, Reservation
 from .opspec import REGISTRY
 from .outbox import Delivery, OutboundFile, human_bytes, resolve_outbound
@@ -1487,6 +1496,122 @@ def _missing_invitees(result: Any) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
+# has this already gone out?
+# ---------------------------------------------------------------------------
+
+
+def _outbound_fingerprint(plan: Any, params: BaseModel, prepared: _Prepared | Any) -> str | None:
+    """Identify this action the way the ledger identifies it, or decline to.
+
+    ``None`` means "not an operation the ledger covers" — reacting twice or
+    joining twice is idempotent at Telegram's end, and putting those under a
+    duplicate check would refuse a lot and prevent nothing.
+
+    Everything fed in comes from :func:`_verify`, not from the plan: the peer id
+    was re-resolved a moment ago, and the file digest was recomputed from the
+    bytes rather than read out of the preconditions. ``allow_duplicate`` is
+    deliberately absent — a repeat somebody approved is still these words going
+    to this person, and folding the flag in would make every send after an
+    approved repeat invisible to the check.
+    """
+    if plan.operation not in LEDGERED_OPERATIONS:
+        return None
+    peer_id = prepared.audit_peer_id
+    if peer_id is None:  # pragma: no cover - every ledgered operation sets it
+        return None
+
+    extra: dict[str, Any] = {}
+    reply_to = getattr(params, "reply_to_message_id", None)
+    if reply_to is not None:
+        # A reply quotes something. The same words under two different messages
+        # read as two different remarks, and only one of them may be a mistake.
+        extra["reply_to_message_id"] = int(reply_to)
+    preview = getattr(params, "link_preview", None)
+    if preview is not None:
+        # A link that expands into a card and the same link that does not are
+        # different objects in the chat, whatever the characters say.
+        extra["link_preview"] = bool(preview)
+    if plan.operation == "message.forward":
+        # A forward carries no body of its own: what identifies it is which
+        # messages, from where — and whether the original author's name travels
+        # with them, which is the difference between a quotation and an
+        # anonymous one.
+        extra["source_peer_id"] = plan.preconditions.get("source", {}).get("peer_id")
+        extra["message_ids"] = sorted(int(one) for one in params.message_ids)  # type: ignore[attr-defined]
+        extra["drop_author"] = bool(getattr(params, "drop_author", False))
+
+    attachment = getattr(prepared, "attachment", None)
+    if attachment is not None:
+        # The same bytes are not the same arrival. A JPEG sent as a photo is
+        # re-encoded and shows a preview; sent as a document it arrives intact,
+        # under a file name people read. Both are in the plan summary somebody
+        # approved, so both belong here.
+        extra["delivery"] = str(attachment.delivery)
+        extra["file_name"] = attachment.name
+    # `silent` is deliberately absent: it decides whether a phone makes a sound,
+    # not what the message says, and the same words sent twice are twice either
+    # way.
+    return fingerprint(
+        account=plan.account,
+        operation=plan.operation,
+        peer_id=int(peer_id),
+        body=prepared.audit_body,
+        file_sha256=attachment.sha256 if attachment is not None else None,
+        extra=extra,
+    )
+
+
+def _refuse_duplicate(
+    ctx: OperationContext, plan: Any, params: BaseModel, prepared: _Prepared | Any
+) -> str | None:
+    """Stop this send if the identical one already went out. Returns the digest.
+
+    Refused, never skipped. A caller told "done" for something that was quietly
+    not done reports success for a message nobody received; a caller told "no"
+    can look, and the message says what to look at — when the identical action
+    was applied, and which plan did it.
+
+    The chat is named by its numeric id and nothing else.
+    :meth:`Envelope.failure` neither wraps untrusted text nor defangs it, and a
+    chat title is written by whoever runs the chat.
+    """
+    digest = _outbound_fingerprint(plan, params, prepared)
+    if digest is None:
+        return None
+    if ctx.ledger is None:
+        # Fail closed. A context with no ledger is a broken installation, not a
+        # permission to skip the check — and every production path builds one.
+        raise InvalidInput(
+            "no outbound ledger is available, so this send cannot be checked for "
+            "duplicates; refusing to apply it"
+        )
+    if getattr(params, "allow_duplicate", False):
+        return digest
+
+    prior = ctx.ledger.find_recent(digest)
+    if prior is None:
+        return digest
+
+    minutes = prior.age_seconds() / 60
+    ago = f"{minutes:.0f} minutes ago" if minutes < 90 else f"{minutes / 60:.1f} hours ago"
+    when = datetime.fromtimestamp(prior.sent_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    raise DuplicateOutbound(
+        # "went out" rather than "was applied": a plan whose outcome was never
+        # established keeps its row on purpose, and telling somebody it
+        # succeeded would be claiming to know the one thing nobody does.
+        f"this identical {plan.operation} to peer {prepared.audit_peer_id} already went out "
+        f"{ago} ({when}) as plan {sanitize_line(prior.plan_id, limit=64)}; "
+        "refusing to do it a second time",
+        suggestion=(
+            "Check the chat first. If the repeat is intended, plan it again with "
+            "allow_duplicate set — the approval preview then says it is a deliberate "
+            "repeat, so whoever approves it knows what they are approving."
+        ),
+        details={"previous_plan_id": prior.plan_id, "previous_sent_at": prior.sent_at},
+    )
+
+
+# ---------------------------------------------------------------------------
 # the applier
 # ---------------------------------------------------------------------------
 
@@ -1508,8 +1633,15 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
 
     meta = Meta(account=plan.account, extra={"plan_id": plan.plan_id})
     reservation: Reservation | None = None
+    ledger_entry: LedgerEntry | None = None
     event_id: str | None = None
     started_rpc = False
+    #: The RPC returned. Kept apart from ``started_rpc`` because the window
+    #: after it is not harmless: recording the outcome can itself fail — a full
+    #: disk, a locked database — and the send has already happened. Without this
+    #: such a failure looked like "nothing left the machine", refunded the slot
+    #: and dropped the ledger row, so the next identical plan went out for real.
+    rpc_completed = False
 
     try:
         operation = REGISTRY.by_name(plan.operation)
@@ -1525,12 +1657,17 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
             # 2. Everything the planner checked, checked again.
             prepared = await _verify(ctx, client, plan, params)
 
-            # 3. The slot is taken before the network call, never after.
+            # 3. Has this exact thing already gone to this peer? Asked here
+            # because it needs what verification just re-resolved, and asked
+            # before the reservation because a refusal spends no budget.
+            digest = _refuse_duplicate(ctx, plan, params, prepared)
+
+            # 4. The slot is taken before the network call, never after.
             reservation = ctx.limits.reserve(
                 limit_kind, account=label, target=prepared.limit_target
             )
 
-            # 4. The attempt is on disk before the request leaves.
+            # 5. The attempt is on disk before the request leaves.
             event_id = ctx.audit.attempt(
                 action=plan.operation,
                 account=label,
@@ -1540,19 +1677,37 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
                 body=prepared.audit_body,
                 extra={"limit_target": prepared.limit_target},
             )
+            if digest is not None and ctx.ledger is not None:
+                # Written before the RPC for the reason the audit attempt is:
+                # a row for a send that did not happen costs one refusal a
+                # person can override on purpose, while a missing row for a send
+                # that did happen costs the duplicate this exists to prevent.
+                ledger_entry = ctx.ledger.record(
+                    digest=digest,
+                    account=label,
+                    operation=plan.operation,
+                    peer_id=prepared.audit_peer_id,
+                    plan_id=plan.plan_id,
+                )
 
-            # 5. The effect.
+            # 6. The effect.
             started_rpc = True
             outcome, rpc_warnings = await asyncio.wait_for(
                 _execute(client, plan, params, prepared),
                 timeout=_rpc_timeout(ctx, plan.operation),
             )
             started_rpc = False
+            rpc_completed = True
 
-        # 6. Record the result, then 7. settle the reservation.
+        # 7. Record the result, then 8. settle the reservation.
         ctx.audit.outcome(event_id, status="applied", message_id=outcome.get("message_id"))
         ctx.plans.finish(plan.plan_id, state=PlanState.APPLIED, outcome=outcome)
         ctx.limits.commit(reservation)
+        if ledger_entry is not None and ctx.ledger is not None:
+            # The row was dated when the attempt began. Now that the send has
+            # demonstrably finished, the window counts from the moment it
+            # actually went out — which for a long upload is minutes later.
+            ctx.ledger.settle(ledger_entry)
 
         return Envelope.success(
             {
@@ -1575,6 +1730,7 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
                 event_id, status="failed", error_code=str(exc.code), detail=exc.message
             )
         ctx.plans.finish(plan.plan_id, state=PlanState.FAILED, outcome={"error": exc.to_dict()})
+        _forget_ledger(ctx, ledger_entry)
         if reservation is not None:
             ctx.limits.release(reservation)
         return Envelope.failure(exc, meta=meta)
@@ -1609,13 +1765,19 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
             ctx.plans.finish(
                 plan.plan_id, state=PlanState.FAILED, outcome={"error": wrapped.to_dict()}
             )
+            # The ledger row goes first. Neither store can be settled in the
+            # other's transaction without welding the two modules together, so
+            # the order decides what a crash in between leaves behind: this way
+            # an over-counted rate limit, which costs one send of budget, rather
+            # than a phantom ledger row, which refuses a send that never happened.
+            _forget_ledger(ctx, ledger_entry)
             if reservation is not None:
                 # Safe: every class in that whitelist is Telegram answering
                 # "no". The refusal itself is the proof nothing happened.
                 ctx.limits.release(reservation)
             return Envelope.failure(wrapped, meta=meta)
 
-        if started_rpc or isinstance(exc, _ambiguous_error_classes()):
+        if started_rpc or rpc_completed or isinstance(exc, _ambiguous_error_classes()):
             unknown = _settle_unknown(
                 ctx, plan, event_id, reservation, f"{type(exc).__name__}: {exc}"
             )
@@ -1628,6 +1790,7 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
         ctx.plans.finish(
             plan.plan_id, state=PlanState.FAILED, outcome={"error": {"internal": str(exc)}}
         )
+        _forget_ledger(ctx, ledger_entry)
         if reservation is not None:
             ctx.limits.release(reservation)
         raise
@@ -1637,7 +1800,7 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
         # must not be left wedged in `applying`, where nothing can ever pick it
         # up again.
         detail = f"{type(exc).__name__}: {exc}"
-        if started_rpc:
+        if started_rpc or rpc_completed:
             _settle_unknown(ctx, plan, event_id, reservation, detail)
         else:
             if event_id is not None:
@@ -1645,9 +1808,22 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
             ctx.plans.finish(
                 plan.plan_id, state=PlanState.FAILED, outcome={"error": {"internal": detail}}
             )
+            _forget_ledger(ctx, ledger_entry)
             if reservation is not None:
                 ctx.limits.release(reservation)
         raise
+
+
+def _forget_ledger(ctx: OperationContext, entry: LedgerEntry | None) -> None:
+    """Drop the ledger row, in every place the rate-limit slot is given back.
+
+    The two go together on purpose: both are settled by the same question — did
+    the request take effect? An unknown outcome keeps its row for the same
+    reason it keeps its slot, because a send nobody can prove did not happen is
+    one a later identical plan should still be stopped by.
+    """
+    if entry is not None and ctx.ledger is not None:
+        ctx.ledger.forget(entry)
 
 
 def _rpc_timeout(ctx: OperationContext, operation: str) -> int:

@@ -350,6 +350,45 @@ is
       a client cached and the list that is callable could disagree, which is the
       worse failure of the two.
 
+- [ ] **The outbound ledger has no command of its own.** `ledger.prune()` exists
+      and nothing calls it, exactly as `limits.prune()` does; rows accumulate at
+      one per applied message and are read back only through the window, so this
+      is a disk-space question rather than a correctness one. What is missing for
+      a person is a way to *look*: "has this already gone out", and "what did this
+      account send in the last six hours", are both one `SELECT` away and have no
+      surface. A read operation would have to decide what it may show — the
+      fingerprint is a digest, but the peer id and the timestamps are not — and
+      that decision has not been taken.
+
+- [ ] **Two different plans carrying the same message can still both pass the
+      duplicate check** if they are applied in the same instant. The check
+      (`_refuse_duplicate`) and the record (`ledger.record`) sit either side of
+      the RPC rather than inside one transaction, which is what keeps the refusal
+      before the rate-limit reservation and the row before the request leaves.
+      Applying *one* plan twice is already impossible — the plan store's claim is
+      a conditional UPDATE — and the gap that remains is one an approving human
+      stands in, so it was left open rather than closed with a lock that would
+      have to be held across a network call. Closing it properly means reserving
+      the fingerprint at check time and settling it like a rate-limit slot.
+
+- [ ] **Refunding a rate-limit slot and dropping a ledger row are two
+      transactions.** Both settle the same question — did the request take
+      effect? — but they live in different modules, and welding them into one
+      `BEGIN IMMEDIATE` would mean one store reaching into the other's
+      connection. The order was chosen instead: the ledger row goes first, so a
+      crash in between leaves an over-counted rate limit (one send of budget)
+      rather than a phantom duplicate (a refusal for something that never
+      happened). Closing it properly means a settlement transaction both stores
+      can join.
+
+- [ ] **Only the four message-producing operations are ledgered.**
+      `message.send`, `message.reply`, `message.send_file`, `message.forward`.
+      The rest are either idempotent at Telegram's end (reacting, joining) or
+      invisible to anybody but the account owner (archive, mute), so a duplicate
+      check would refuse a lot and prevent nothing. `chat.create` is the one that
+      could be argued: applying two identical plans makes two groups with the same
+      title, and nobody has decided whether that is a mistake or a Tuesday.
+
 ## Known gaps in the CLI surface
 
 - [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in

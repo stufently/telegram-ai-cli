@@ -275,6 +275,46 @@ treats as abuse.
 enabled and no key available is refused rather than quietly writing plan bodies
 to the database in plaintext.
 
+## `ledger`
+
+What has already been sent, so that it is not sent again. One row per applied
+outbound message in `state.db`, keyed by a fingerprint of what the recipient
+sees — the account, the operation, the numeric peer id, the words after
+cosmetic whitespace inside each line is normalised away (line breaks survive:
+Telegram renders them), the sha256 of any attachment, and the choices that
+change how it all renders: which message a reply quotes, whether a link expands
+into a preview, whether a file arrives as a compressed photo or as the original
+document and under what name, and whether a forward keeps its author's name.
+`silent` is left out on purpose — it decides whether a phone makes a sound, not
+what the message says.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `ledger.window_seconds` | `21600` (6 hours, min 0) | How long an identical send to the same peer is refused as a duplicate. `0` turns the check off |
+
+The failure this exists for is not a race — one plan cannot be applied twice, the
+plan store's atomic claim sees to that — but an *amnesia*: an agent in a new
+session, with no memory of the last one, plans and applies a message it already
+sent, and the person on the other end sees the same words twice with no way to
+tell which run produced them. A duplicate is **refused**, never silently skipped:
+a caller that cannot tell "sent" from "quietly didn't" reports success for a
+message nobody received.
+
+Six hours is chosen deliberately. The duplicate worth catching is a *re-run* — a
+restarted process, a retried script, a fresh session — and those happen within
+hours; a message on a daily rhythm is a legitimate repeat and must never be
+caught, which a six-hour window cannot reach even with hours of drift. A longer
+window trades a rare catch for routine false refusals, and every false refusal
+teaches whoever hits it to set `allow_duplicate` by reflex, which is how the
+check stops working.
+
+Repeating on purpose is a field on the plan, not a flag on `plan apply`:
+`allow_duplicate` (`--allow-duplicate`) on `message.send`, `message.reply`,
+`message.send_file` and `message.forward`. It is never the default, it prints
+`DELIBERATE REPEAT` in the approval preview so whoever approves knows what they
+are approving, and it is not part of the fingerprint — approving one repeat does
+not make every later copy invisible.
+
 ## `download`
 
 | Key | Default | Meaning |

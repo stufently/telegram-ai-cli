@@ -162,6 +162,9 @@ plans:
   ttl_seconds: 86400
   max_pending: 50
 
+ledger:
+  window_seconds: 21600   # refuse an identical send to the same peer within 6h; 0 turns it off
+
 audit:
   include_bodies: false   # message bodies are hashed by default, not stored in full
 

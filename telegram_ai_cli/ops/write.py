@@ -173,6 +173,22 @@ def describe(resolved: Resolved) -> str:
     return " ".join(parts)
 
 
+def repeat_notice(params: RepeatableWriteInput) -> str:
+    """The line telling a reviewer that they are approving a repeat.
+
+    Empty for an ordinary plan, so the notice only ever appears where it means
+    something. Shouted, because it is the one fact separating this approval from
+    the identical one somebody has already given: the applier refuses a repeat by
+    default, and this plan has asked it not to.
+    """
+    if not params.allow_duplicate:
+        return ""
+    return (
+        "\nDELIBERATE REPEAT: allow_duplicate is set on this plan. If these exact words "
+        "have already gone to this chat, they will be sent AGAIN rather than refused."
+    )
+
+
 # ---------------------------------------------------------------------------
 # policy
 # ---------------------------------------------------------------------------
@@ -365,14 +381,37 @@ class WriteInput(BaseModel):
     )
 
 
-class SendMessageInput(WriteInput):
+class RepeatableWriteInput(WriteInput):
+    """A write that puts new words in a chat, and can therefore be a duplicate.
+
+    ``allow_duplicate`` is the only way to send the same thing to the same peer
+    twice inside the ledger's window, and it is a field on the plan rather than a
+    flag on ``plan apply`` on purpose: the person approving is entitled to see
+    that they are approving a repeat, and a switch typed at apply time is one
+    nobody reviewed. It is never the default — a repeat is normally a re-run
+    somebody forgot about — and it is deliberately not part of the fingerprint,
+    so an approved repeat does not make every later copy invisible.
+    """
+
+    allow_duplicate: bool = Field(
+        default=False,
+        description=(
+            "Send this even though an identical message has already gone to this chat "
+            "recently. Off by default: the applier refuses a repeat, because the usual "
+            "cause is a re-run nobody meant. Setting it says the repeat is intended, and "
+            "the approval preview says so in as many words."
+        ),
+    )
+
+
+class SendMessageInput(RepeatableWriteInput):
     chat: int | str = Field(description="Chat id, @username, or phone-free user id.")
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
     silent: bool = Field(default=False, description="Deliver without a notification sound.")
     link_preview: bool = True
 
 
-class ReplyMessageInput(WriteInput):
+class ReplyMessageInput(RepeatableWriteInput):
     chat: int | str
     reply_to_message_id: int = Field(gt=0)
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
@@ -380,7 +419,7 @@ class ReplyMessageInput(WriteInput):
     link_preview: bool = True
 
 
-class SendFileInput(WriteInput):
+class SendFileInput(RepeatableWriteInput):
     """One file, one chat.
 
     A list of paths would let one approval upload a directory, and the review
@@ -434,7 +473,7 @@ class DeleteMessageInput(WriteInput):
     )
 
 
-class ForwardMessageInput(WriteInput):
+class ForwardMessageInput(RepeatableWriteInput):
     source_chat: int | str
     message_ids: list[int] = Field(min_length=1, max_length=MAX_MESSAGE_IDS)
     destination_chat: int | str
@@ -705,7 +744,7 @@ async def plan_send_message(ctx: OperationContext, params: BaseModel) -> Plan:
         f"Send a message as {label} to {describe(target)}\n"
         f"--- message ({len(p.text)} chars) ---\n"
         f"{quote_for_review(p.text)}"
-    )
+    ) + repeat_notice(p)
     return await _create(
         ctx,
         operation="message.send",
@@ -736,7 +775,7 @@ async def plan_reply_message(ctx: OperationContext, params: BaseModel) -> Plan:
         f"{p.reply_to_message_id}\n"
         f"--- in reply to ---\n{quoted}\n"
         f"--- message ({len(p.text)} chars) ---\n{quote_for_review(p.text)}"
-    )
+    ) + repeat_notice(p)
     return await _create(
         ctx,
         operation="message.reply",
@@ -792,6 +831,8 @@ async def plan_send_file(ctx: OperationContext, params: BaseModel) -> Plan:
         parts.append(f"--- in reply to message {p.reply_to_message_id} ---\n{quoted}")
     if p.silent:
         parts.append("Delivered silently: no notification sound.")
+    if notice := repeat_notice(p):
+        parts.append(notice.strip())
 
     return await _create(
         ctx,
@@ -900,7 +941,7 @@ async def plan_forward_message(ctx: OperationContext, params: BaseModel) -> Plan
         f"  from {describe(source)}\n"
         f"  to   {describe(destination)}\n"
         f"--- messages ---\n{listed}"
-    )
+    ) + repeat_notice(p)
     return await _create(
         ctx,
         operation="message.forward",

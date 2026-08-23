@@ -29,6 +29,7 @@ class ErrorCode(StrEnum):
     FORBIDDEN_BY_ALLOWLIST = "FORBIDDEN_BY_ALLOWLIST"
     FORBIDDEN_BY_DENYLIST = "FORBIDDEN_BY_DENYLIST"
     LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
+    DUPLICATE_OUTBOUND = "DUPLICATE_OUTBOUND"
 
     # --- plans -----------------------------------------------------------
     PLAN_NOT_FOUND = "PLAN_NOT_FOUND"
@@ -145,6 +146,20 @@ class Denylisted(PolicyError):
 
 class LimitExceeded(PolicyError):
     code = ErrorCode.LIMIT_EXCEEDED
+
+
+class DuplicateOutbound(PolicyError):
+    """This exact thing has already gone to this peer, recently.
+
+    Refused rather than skipped. A caller that cannot tell "sent" from "quietly
+    did nothing" is worse off than one that gets an error, because it will
+    report success for a message the other person never received — or, worse,
+    stop looking for the one they received twice. The way to send it again is to
+    say so on the plan, where the person approving it can read that it is a
+    deliberate repeat.
+    """
+
+    code = ErrorCode.DUPLICATE_OUTBOUND
 
 
 # --- plans -----------------------------------------------------------------
