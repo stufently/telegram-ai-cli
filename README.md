@@ -49,11 +49,17 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai whois` | Who a `@username`, a numeric id, or an invite link resolves to |
 | `tg-ai chat members` | Who's in a chat, and who administers it |
 | `tg-ai media fetch` | Save a message's photo, video or document to a server-controlled path |
+| `tg-ai archive sync` | Copy one named chat into a local SQLite archive, resuming where the last run stopped |
+| `tg-ai archive search` | Search that archive offline — substring **or regular expression**, by sender, by date — with no Telegram request at all |
+| `tg-ai archive status` | Which chats are archived, how many messages, and when each was last synced |
+| `tg-ai archive forget` | Erase one chat, and every message of it, from the local archive |
 | `tg-ai drafts` | What was started and never sent, and in which chat |
 | `tg-ai scheduled` | What is queued to be sent to a chat later, and when |
 | `tg-ai account sessions` | Which devices and apps this account is signed in on — and whether one of them isn't yours |
 | `tg-ai message send` / `chat join` / `chat promote` / … | Validate and save an intent — send, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
 | `tg-ai chat ban` / `unban` / `kick` / `restrict` / `demote` | Moderation, planned the same way: one member per plan, and the preview says who, where, which rights and for how long |
+| `tg-ai message schedule` | Queue a message for an exact time — or for when the other person is next online — as a plan. Once applied it sits in Telegram's own scheduled queue, visible and cancellable in the app |
+| `tg-ai chat archive` / `chat mute` | Put a chat in Archived, or silence it for a while or indefinitely — settings only this account can see, planned like every other write |
 | `tg-ai plan list` / `plan show <id>` | See what's waiting for a decision, and exactly what applying it would do |
 | `tg-ai plan apply <id>` | Carry out exactly what a saved plan describes |
 | `tg-ai plan reject <id>` | Decline a pending plan |
@@ -223,7 +229,7 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
 
 ## MCP tools
 
-Thirty-two tools: fifteen that run immediately, and seventeen plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
+Forty-four tools: twenty that run immediately, and twenty-four plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
 telegram_fleet             telegram_plan_send_message     telegram_plan_join_chat
@@ -234,15 +240,21 @@ telegram_search            telegram_plan_forward_message  telegram_plan_promote_
 telegram_whois             telegram_plan_mark_read        telegram_plan_set_profile
 telegram_chat_members      telegram_plan_ban_user         telegram_plan_restrict_user
 telegram_media_fetch       telegram_plan_unban_user       telegram_plan_demote_admin
-telegram_message_reactions telegram_plan_kick_user
-telegram_chat_topics
-telegram_watch
-telegram_drafts
-telegram_scheduled
+telegram_message_reactions telegram_plan_kick_user        telegram_plan_react_message
+telegram_chat_topics       telegram_plan_pin_message      telegram_plan_unreact_message
+telegram_watch             telegram_plan_unpin_message    telegram_plan_schedule_message
+telegram_drafts            telegram_plan_archive_chat
+telegram_scheduled         telegram_plan_mute_chat
 telegram_sessions
 telegram_mentions
 telegram_folders
+telegram_archive_sync
+telegram_archive_search
+telegram_archive_status
+telegram_archive_forget
 ```
+
+The four `telegram_archive_*` tools are the way out of paying an RPC for every question. `archive_sync` copies **one named chat** — there is no daemon, no background sweep and no "archive everything" — into a SQLite file on your own disk, resuming from a stored watermark so a second run fetches only what is new. `archive_search` then answers offline, which is what makes **regular expressions** possible at all: Telegram's own search matches text, not patterns. Two properties keep that honest. The read allowlist is re-applied **on the read**, not remembered from the write, so a chat archived yesterday and closed today stops answering and is counted as withheld rather than quietly missing. And every archive answer carries `meta.source: archive` plus the timestamp of the oldest sync it covers — an archive result mistaken for a live one is stale state reported as current. The file is `0600`, gitignored, and **not encrypted**: the `.session` file next to it already grants full live access to the account, so encryption would not raise the bar while it would make offline search impossible. Recognisable secrets are masked *before* they are written, and `archive_forget` erases a chat — including one the policy has since closed, because "you may not read it and you may not delete it" is the worst of both answers. See [`docs/operations.md`](docs/operations.md#the-local-archive).
 
 `telegram_folders` reads the chat folders the user already arranged by hand, and `telegram_chats` / `telegram_inbox` take a `folder` argument that narrows a listing to one. A folder is the user's own sorting, never a permission: the filter runs after the policy, so a folder that names a chat this configuration may not enumerate does not make it appear.
 
@@ -262,7 +274,11 @@ No read tool ever marks a chat read — `mark_read` only exists as an explicit p
 
 `telegram_mentions` is the other half of that promise, and the one place where getting it wrong is invisible. Telegram counts unread *mentions* and unread *reactions* separately from plain unread, and Telethon's namespace puts `GetUnreadMentionsRequest` one letter from `ReadMentionsRequest` — the first asks which mentions are unread, the second clears them on every device the owner has. Only the `Get` pair is ever issued, and the test asserts on the whole list of requests the operation made rather than on its answer. Those same two counters rank `telegram_inbox`: a chat where somebody called your name outranks a chat that is merely busy.
 
-`telegram_message_reactions` reports counts, not people. Telegram can name everyone who reacted; that request is never made, and where the roster is unavailable the payload says so rather than leaving a gap. Reacting is a write and has no tool at all.
+`telegram_plan_schedule_message` is the one write whose approval outlives this tool. Applying it puts the message in **Telegram's own scheduled queue**, where the owner can see it in the app and cancel it there — from a phone, with no agent running and no terminal open. The time has to carry an explicit UTC offset: a naive one is refused rather than guessed, because a summary that says "09:00" without saying whose is one nobody can check. `telegram_plan_archive_chat` and `telegram_plan_mute_chat` sit at the opposite end of the blast radius — they change this account's own chat list and its own notifications, nobody else can observe either, and both summaries say so in words, because "mute" and "ban" are one word apart in a review queue.
+
+`telegram_message_reactions` reports counts, not people. Telegram can name everyone who reacted; that request is never made, and where the roster is unavailable the payload says so rather than leaving a gap. Reacting is a write, so it is planned rather than performed: `telegram_plan_react_message` and `telegram_plan_unreact_message` record the intent, and a person applies it. Telegram's reaction call takes the account's *whole* list for a message rather than a delta, so reacting replaces whatever this account had reacted with unless `keep_existing` is set — the plan summary says which of the two is about to happen, and the applier refuses if the list moved while the plan sat in the queue.
+
+`telegram_plan_pin_message` is the loudest thing here short of sending. By default every member of the chat gets a notification and the banner appears at the top of their window; `silent` suppresses the notification, not the banner, and the summary says which one it is. In a one-to-one chat it pins on this side only unless `both_sides` is set. `telegram_plan_unpin_message` is quieter but no less visible, and it is the one operation here that routinely undoes somebody else's decision — the preview says whose message it is. Both are judged by the `admin` policy rather than `send`, because a pin changes what everyone in the chat sees. These four, and the message operations generally, take a `t.me/…/123` permalink in `chat` and read the message number out of it.
 
 ## JSON contract
 

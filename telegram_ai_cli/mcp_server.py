@@ -75,8 +75,14 @@ def _tool_for(op: Operation, *, plan: bool) -> types.Tool:
         inputSchema=op.input_schema(),
         annotations=types.ToolAnnotations(
             readOnlyHint=not plan and op.effect is Effect.READ,
-            destructiveHint=False,
-            idempotentHint=op.effect is Effect.READ,
+            # Read off the operation rather than hardcoded. A plan tool destroys
+            # nothing whatever it plans — it records an intention — but an
+            # operation that erases local data does, and a client that
+            # auto-approves what it was told is harmless would act on the lie.
+            destructiveHint=op.destructive and not plan,
+            idempotentHint=(
+                op.idempotent if op.idempotent is not None else op.effect is Effect.READ
+            ),
             openWorldHint=True,
         ),
     )

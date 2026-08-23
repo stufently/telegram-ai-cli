@@ -121,10 +121,54 @@ replaying from their own machine, which is a good way to have it killed.
 | `paths.state` | `$XDG_STATE_HOME/telegram-ai-cli` | `state.db` (accounts, plans, rate limits) and `secret.key` |
 | `paths.downloads` | `…/telegram-ai-cli/downloads` | Everything `media fetch` writes |
 | `paths.audit_log` | `…/telegram-ai-cli/audit.jsonl` | The append-only audit log |
+| `paths.archive` | `…/telegram-ai-cli/archive.sqlite3` | The local message archive — only what `archive sync` was told to copy |
 
 Directories are created `0700` and account material `0600`. A failed `chmod` is
 fatal rather than logged and ignored: a warning would leave the file readable
 and the run continuing, which is the outcome the check exists to stop.
+
+### The archive file, and why it is not encrypted
+
+`paths.archive` is a SQLite file created `0600` inside the `0700` state
+directory, and it holds message text — other people's — for whichever chats
+`archive sync` was explicitly told to copy. Nothing fills it in the background;
+there is no key that turns on bulk collection.
+
+The mode is checked and narrowed on **every** open, not only at creation: a file
+left `0644` by an earlier version, a restore from a backup or a careless
+`chmod -R` all produce a readable copy of somebody's private messages that a
+create-time-only check would never notice. A path that is a symlink, or exists
+and is not a regular file, is refused outright. The `-wal` and `-shm` sidecars
+inherit the mode of the main file, which is why it is narrowed before SQLite
+opens it.
+
+It is **deliberately not encrypted**, and the reasoning is worth stating rather
+than leaving to be re-derived. The same state tree holds the Telethon `.session`
+files, and a session file *is* the account: whoever can read one can read every
+message in Telegram, live, with no archive in the picture. So encrypting the
+archive would not raise the bar an attacker has to clear — it would only make
+offline search and regular expressions impossible, which is the entire reason
+the archive exists. What protects it is the same thing that protects the session
+files next to it: the permission bits, the directory mode, and `.gitignore`.
+
+Two consequences follow, and both are load-bearing:
+
+- **Recognisable secrets are masked before they are written**, not only on the
+  way out. A live read never persists anything, so masking at the edge of a
+  result is enough there; the archive keeps what it is given, so a raw card
+  number or login code would sit unencrypted on disk for as long as the archive
+  is kept. `redact()` therefore runs on message text and sender names on the way
+  in. The cost is that a regular expression cannot match what was masked.
+- **Erasing is an operation.** `archive forget <chat_id>` removes a chat and
+  every message of it, and it works even for a chat the read policy has since
+  closed — see [`operations.md`](operations.md#telegram_archive_forget--tg-ai-archive-forget).
+  It is a separate database from `state.db` precisely so that erasing every
+  archived message cannot take the account registry, the pending plans and the
+  rate-limit history with it.
+
+The read allowlist still applies to everything in it, and it is applied **on the
+read**: a chat archived while it was permitted stops answering the moment the
+configuration stops permitting it.
 
 ## `safety`
 

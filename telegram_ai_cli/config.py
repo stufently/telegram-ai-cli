@@ -50,7 +50,18 @@ class PathsConfig(BaseModel):
     sessions: Path = Field(default_factory=lambda: _state_home() / "sessions")
     state: Path = Field(default_factory=_state_home)
     downloads: Path = Field(default_factory=lambda: _state_home() / "downloads")
+    #: The only directory a plan may upload a file from — today a chat photo.
+    #: A separate directory from `downloads` on purpose: that one fills with
+    #: media strangers sent, and "publish this file to a chat" should not be
+    #: able to name one of those by accident.
+    uploads: Path = Field(default_factory=lambda: _state_home() / "uploads")
     audit_log: Path = Field(default_factory=lambda: _state_home() / "audit.jsonl")
+    #: The local message archive, filled only by `archive sync` on a named chat.
+    #: A file of its own rather than a table in `state.db`, so that erasing every
+    #: archived message cannot take the account registry, the pending plans and
+    #: the rate-limit history with it. Created 0600 and not encrypted — the
+    #: reasoning is in `telegram_ai_cli/archive.py` and `docs/configuration.md`.
+    archive: Path = Field(default_factory=lambda: _state_home() / "archive.sqlite3")
 
 
 class PeerRule(BaseModel):

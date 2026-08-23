@@ -34,9 +34,49 @@ is
       reviewed. `tests/test_folders.py` adds a third — a fake registry and
       client driving `handle_chats`, `handle_inbox` and `handle_folders` over
       real Telethon entities, which is how "a folder cannot admit a chat the
-      policy closes" is asserted. Three per-module fakes rather than a shared
-      fixture; promoting one to `conftest.py` is what would let the cases above
-      be written, and would stop the fourth from being written from scratch.
+      policy closes" is asserted. `tests/test_archive.py` is the fourth, and it
+      *was* written from scratch — which is the evidence for the point below.
+      Per-module fakes rather than a shared fixture; promoting one to
+      `conftest.py` is what would let the cases above be written, and would stop
+      a fifth from being written from scratch again.
+
+- [ ] **The regex time budget is POSIX- and main-thread-only.** `archive search`
+      caps a pattern at 10 seconds with `SIGALRM`, which is the only
+      interruption the standard library offers without a second process — and
+      `signal.signal` can only be called from the main thread, so an MCP server
+      that ever dispatches handlers off it loses the timer silently (the code
+      degrades to no timer rather than a fake one, and says so in
+      `docs/operations.md`). A real fix is a matching engine with a guaranteed
+      bound: the `regex` package's `timeout=`, or RE2. Both are a dependency,
+      which is why neither was added here without asking.
+
+- [ ] **The archive is per account, and nothing correlates across accounts.**
+      `archive search` takes one `account` like every other operation, so
+      "where did this phrase appear across the whole fleet" still means one call
+      per account and joining the answers by hand. The rows are keyed
+      `(account, chat_id, message_id)` and a cross-account query is one `IN`
+      clause away — what is undecided is the surface: a `fleet` flag on
+      `archive search` (which then has to say *which* account each hit came
+      from, and re-check each one's policy separately), or a distinct operation.
+      Deliberately out of scope for the archive work itself; correlation was
+      named as a thing to stop and ask about rather than build.
+
+- [ ] **The archive has no retention policy and no size ceiling.** `archive
+      sync` grows the file for as long as it is called, and the only way back is
+      `archive forget` on a named chat. There is no "drop messages older than N
+      days", no per-chat message cap and no equivalent of
+      `download.total_quota_bytes`. For a handful of chats this is fine; for a
+      standing habit of archiving everything permitted, the file is unbounded.
+      A quota would need a policy for what to evict — oldest messages, or whole
+      chats least recently searched — and neither is obviously right.
+
+- [ ] **A message deleted or edited on Telegram is not reconciled.** Sync is
+      forward-only: it fetches ids above the watermark and backfills below the
+      oldest one, so a message deleted after it was archived stays in the
+      archive, and one edited outside both ranges keeps its old text. Detecting
+      either means re-reading a range already stored and diffing it, which is
+      the cost the watermark exists to avoid. Worth doing only as an explicit
+      `archive resync --chat` that a person asks for.
 
 - [ ] **"Muted" is read per chat, never from the account's defaults.**
       `folders.dialog_is_muted` (formerly `inbox._is_muted`) reports muted only
@@ -99,13 +139,33 @@ is
       permitted account; `telegram_watch` uses exactly one, because watching *n*
       accounts would hold *n* session locks for the duration. Waiting on several
       accounts at once needs the lock question above answered first.
-- [ ] **Plan operations do not accept a `t.me` message link.** Reads resolve one
-      through `chats.resolve_chat_ref` and keep its message number; `write.py`
-      still hands the raw string to `client.get_entity`, so a link is either
-      resolved as a chat by Telethon or refused outright — either way the number
-      is lost. `message.reply` / `message.edit` / `message.delete` are the ones
-      where a pasted link is the natural input, and they should take the message
-      id from it the way `media.fetch` and `message.reactions` now do.
+- [ ] **Most plan operations still do not accept a `t.me` message link.** The
+      four marks (`message.react` / `unreact` / `pin` / `unpin`) do:
+      `ops/marks.resolve_message` parses the link with
+      `links.parse_telegram_link`, checks the policy, then applies the reads'
+      own `chats.guard_message_link` and `chats.message_id_from`. Everything in
+      `write.py` still hands the raw string to `client.get_entity`, so a link is
+      either resolved as a chat by Telethon or refused outright — either way the
+      number is lost. `message.reply` / `message.edit` / `message.delete` are
+      where a pasted link is the natural input, and the helper to give them is
+      already written and tested; what is missing is deciding whether it moves
+      into `write.py` or `marks.py` stays the one module that owns
+      message-addressed writes.
+- [ ] **A reaction plan cannot say "keep the others" safely in every chat.**
+      `message.react --keep-existing` computes the account's whole new list and
+      sends it, because Telegram's call takes a list rather than a delta — but
+      whether a chat allows more than one reaction per person is
+      `reactions_uniq_max` on the chat's full info, which is a second request
+      nobody makes. So the plan promises something a chat may refuse, and the
+      refusal only shows up at apply time. Fetching the ceiling at plan time
+      would let the summary say "this chat allows one reaction, so it will
+      replace" with certainty rather than in the conditional.
+- [ ] **Which reactions a chat permits is never checked.** A chat can restrict
+      reactions to a named set, and a custom emoji reaction is a paid feature the
+      account may not have. Both surface as an apply-time refusal
+      (`ReactionInvalidError`) rather than as something the plan could have
+      known; `messages.getAvailableReactions` and the chat's own
+      `available_reactions` are what would answer it.
 - [ ] **`Envelope.failure` is outside the trust boundary.** `telegram_result`
       wraps and defangs a *successful* payload; an error is assembled from an
       exception and neither wrapped nor defanged, and `meta.untrusted_content`
@@ -151,6 +211,22 @@ is
       one already in force. Telegram answers all three with
       `channels.getParticipant` and `ChannelParticipantsBanned`; the question is
       whether that belongs in `chat.members` as a filter or in a read of its own.
+
+- [ ] **Muting and archiving are gated by the *send* allowlist.** `chat.mute` and
+      `chat.archive` declare `Capability.SEND`, because that is the rule which
+      already governs acting on a chat and a capability of their own would be a
+      policy surface nobody asked for. The cost is a real case: a noisy chat this
+      configuration may read but never write to cannot be muted through the tool.
+      Whether changes only the account owner can observe deserve a write capability
+      of their own is a decision nobody has taken.
+
+- [ ] **A scheduled message can be created here but not cancelled here.**
+      `message.schedule` puts one in Telegram's queue and `scheduled.list` reads the
+      queue back; nothing deletes an entry or fires one early, and `ops/pending.py`
+      names the two requests it refuses to make. The asymmetry is deliberate — the
+      queue is visible in the app, where cancelling is one tap and needs no agent,
+      which is most of the reason the operation exists — but it does mean a wrong
+      schedule applied from a headless machine has to be undone on a phone.
 
 ## Known gaps in the CLI surface
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 from ..opspec import REGISTRY
 from . import (
     accounts,
+    archive,
     chats,
     contacts,
     fleet,
@@ -40,6 +41,7 @@ from . import (
 __all__ = [
     "REGISTRY",
     "accounts",
+    "archive",
     "chats",
     "contacts",
     "fleet",

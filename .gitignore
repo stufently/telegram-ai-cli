@@ -246,6 +246,16 @@ __marimo__/
 *.audit.jsonl
 /secret.key
 
+# The local message archive (`tg-ai archive sync`). Other people's messages,
+# stored unencrypted by design — see docs/configuration.md. It must never reach
+# a commit, so the WAL sidecars are named too: they hold committed rows that the
+# main file does not yet.
+archive.sqlite3
+archive.sqlite3-wal
+archive.sqlite3-shm
+archive.sqlite3-journal
+*.archive.sqlite3
+
 # Local config may carry api_id/api_hash and proxy credentials.
 tgai.yaml
 config/tgai.yaml

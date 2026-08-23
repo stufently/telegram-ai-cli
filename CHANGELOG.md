@@ -9,6 +9,73 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- `tg-ai message schedule` / `telegram_plan_schedule_message` — plan a message for a
+  given time, or for the moment the other person is next online. The point is not
+  that it goes out later: once the plan is applied the message sits in **Telegram's
+  own scheduled queue**, where the owner sees it in the app and can cancel it there —
+  from a phone, with no agent running and no terminal open. `at` is ISO-8601 and must
+  carry an explicit UTC offset; a naive time is refused rather than guessed, and the
+  summary prints the offset form, the UTC equivalent and the distance from now,
+  because a line that says "09:00" without saying whose is one nobody can check. Up to
+  a year ahead; `when_online` is Telegram's own mode and needs a one-to-one chat,
+  reusing the sentinel `telegram_scheduled` already reads back rather than a second
+  copy of it. A plan whose moment has passed is **refused** at apply time rather than
+  sent late, because Telegram sends a scheduled message with a past date immediately.
+- `tg-ai chat archive` / `telegram_plan_archive_chat` and `tg-ai chat mute` /
+  `telegram_plan_mute_chat` — move a chat into Archived or back out of it, and mute it
+  for a while, indefinitely, or not at all. These are the two writes nobody else can
+  observe: they change this account's own chat list and its own notifications, and the
+  other side is not blocked, left or banned, keeps writing, and cannot tell. Both plan
+  summaries say that in words, because the risk here is not the effect but a reviewer
+  filing "mute" next to "ban". A mute records its *duration* and computes the deadline
+  when the plan is applied, so one approved in the evening and applied next morning
+  still mutes for the eight hours that were reviewed; "for ever" stays a sentinel
+  rather than being rendered as a date in 2038.
+
+- **Reactions and pins** — `telegram_plan_react_message`,
+  `telegram_plan_unreact_message`, `telegram_plan_pin_message`,
+  `telegram_plan_unpin_message` (`tg-ai message react` / `unreact` / `pin` /
+  `unpin`). Reading reactions has been possible since `telegram_message_reactions`;
+  leaving one was not, and neither was the single most visible act a member of a
+  chat can perform short of speaking — putting a message at the top of everyone's
+  window. All four are `remote_write`: planned, reviewed, and applied from a
+  terminal, with no direct MCP tool, which the registry's invariants enforce.
+  **These are the first writes that act on other people's messages.** `edit` and
+  `delete` refuse a message this account did not send; a reaction is *for*
+  somebody else's message and pinning one is the whole point of pinning, so that
+  guard cannot apply and the preview carries the weight instead. It names the
+  emoji *and* spells out its codepoints — two emoji can render identically, and
+  the terminal sanitizer strips joiners out of a multi-part sequence — quotes the
+  message, and says whether this account or somebody else wrote it.
+  **A pin says who finds out.** By default every member gets a notification and
+  the banner appears at the top of their window, and the summary says so;
+  `silent` suppresses the notification, not the banner, and the summary says
+  that too. In a one-to-one chat a pin lands on this side only unless
+  `both_sides` is set — the flag is refused rather than ignored anywhere it
+  would not mean that. Unpinning is never one-sided: a banner left at the top of
+  the other person's window is not what "unpinned" says.
+  **Telegram's reaction call takes the account's whole list, not a delta**, so
+  reacting replaces whatever this account had reacted with unless `keep_existing`
+  is set, the summary says which of the two is happening, and the plan records
+  what was there. The applier refuses if that moved — otherwise a plan reviewed
+  against one set and applied against another would silently discard a reaction
+  nobody looked at. `add_to_recent` is off: reordering the "recently used" row on
+  the owner's own phone is an invisible side effect of an act approved for a
+  different reason. And where the account has left a paid (star) reaction, any
+  change that would have to re-send it is refused: re-sending one is a purchase,
+  not a copy.
+  **A no-op never reaches the review queue.** Reacting with the reaction already
+  there, removing one this account never left, pinning what is already pinned,
+  unpinning what is not pinned — each is refused while the plan is written. A
+  plan still costs a person the reading of it.
+  **They take a `t.me` link.** `chat` accepts a permalink and takes the message
+  number from it, through the same parser and the same two guards the reads use
+  (`links.parse_telegram_link`, `chats.guard_message_link`), so a link into a
+  one-to-one conversation and a `?comment=` link are refused here exactly as they
+  are there. Reacting is judged by the `send` policy and pinning by `admin`,
+  because a pin changes what every member of the chat sees.
+  `telegram_ai_cli/ops/marks.py`, `tests/test_reactions_pins.py`.
+
 - **Moderation, and an undo for every rights change** — `telegram_plan_ban_user`,
   `telegram_plan_unban_user`, `telegram_plan_kick_user`,
   `telegram_plan_restrict_user`, `telegram_plan_demote_admin` (`tg-ai chat ban`
@@ -47,6 +114,91 @@ before that, breaking changes can happen on any `0.x` release.
   applier's own RPC step over another, which is how "planning issues no
   request", "one flag takes GIFs and inline results with it" and "a restriction
   is not a ban" are asserted rather than reviewed.
+
+- **A local archive, and offline search over it** — `telegram_archive_sync`,
+  `telegram_archive_search`, `telegram_archive_status`,
+  `telegram_archive_forget` (`tg-ai archive …`). Until now every search was an
+  RPC: it spent the account's flood budget, it could only match *text* —
+  Telegram has no regular expressions — and it answered about one account per
+  call. A named chat can now be copied into a SQLite file on this machine and
+  queried there instead, with regular expressions, sender and date filters, and
+  no Telegram request at all.
+  **Nothing fills itself.** One chat per `archive sync`, named explicitly; there
+  is no daemon, no background sweep and no key that turns on bulk collection. An
+  archive that filled itself would turn a tool with an allowlist into a bulk
+  collector of private correspondence, sized by uptime rather than by anything a
+  person decided.
+  **Re-running does not re-download.** Two watermarks per chat: a repeat call
+  fetches what is new (bounding the request below with `newest_message_id`), then
+  backfills older messages downward until the per-call budget runs out. Three
+  separate fields report where it got to, because they are three questions:
+  `contiguous` (no hole in the middle), `reaches_first_message` (the backfill got
+  to the beginning) and `complete` (both).
+  **An interrupted run leaves a resumable hole, not a permanent one.** A
+  watermark is never advanced across a gap — moving it would leave the messages
+  inside unreachable forever — and a resume cursor is stored so the next call
+  carries on from where it stopped. Raised by review (2026-08-23): without that
+  cursor, a chat that gained more messages than one budget could fetch
+  re-downloaded the same page on every call and never joined the two ends,
+  however often it was run. `archive search` warns when a chat it covered has a
+  gap, because a hole answers "nobody said that" as confidently as a whole
+  archive.
+  **The read policy is applied on the *read*, not remembered from the write.**
+  An archive is a snapshot of a decision that was true when it was taken, so
+  every path out of it rebuilds the chat's `PeerRef` from the stored identity and
+  asks the kernel again against today's configuration: a chat archived while it
+  was permitted and closed since is withheld and *counted*, never quietly
+  missing. The hard floor is checked twice — on the way in, so Service
+  Notifications and Saved Messages never land on disk, and on the way out, so a
+  database copied in from elsewhere cannot smuggle them back. Two narrowings
+  keep that fail-closed (raised by review): a stored chat kind this build cannot
+  parse is refused rather than treated as `unknown` — which is *not private*, so
+  a private conversation in a foreign database would otherwise be judged under
+  the group rule — and policy is decided on the numeric id alone, never on the
+  `username` copied at sync time, since handles are reassignable.
+  `tests/test_archive.py` drives the real handlers over a local fake client to
+  assert both directions, plus the watermark, the trust boundary and the file
+  mode.
+  **Effect `local_write`, not `read`, for sync and forget.** They write a durable
+  copy of somebody's private messages to this machine's disk; classifying that
+  with the operations that consume nothing would be the quiet lie. Equally not
+  `remote_write` — nothing they do is visible from Telegram's side — so the
+  invariant that no MCP tool applies a plan is untouched. `media_fetch` set the
+  precedent.
+  **Not encrypted, deliberately, and the archive is masked on the way in.** The
+  same state directory holds the `.session` files, and a session file *is* the
+  account: encrypting the archive next to it would not raise the bar an attacker
+  must clear, while it would make offline search and regular expressions
+  impossible. `0600` in a `0700` directory and `.gitignore` do the work instead.
+  Because the file persists what a live read never keeps, `redact()` runs on
+  message text and sender names *before* the row is written — the trade being
+  that a pattern cannot match what was masked.
+  **Erasing is a first-class operation and is *not* allowlist-gated.**
+  `archive forget <chat_id>` removes a chat and every message of it, and works
+  for a chat the policy has since closed — that chat is precisely the one whose
+  copy ought to go, and refusing would strand personal data with no way to
+  remove it through the tool. Idempotent, and it takes an id rather than a
+  username so that a chat since left can still be erased.
+  The file mode is checked and narrowed on **every** open, not only at creation
+  — a file left `0644` by an earlier version, a restore from a backup or a
+  careless `chmod -R` is exactly what a create-time-only check never notices —
+  and a symlink or non-regular file at that path is refused (raised by review).
+  New setting `paths.archive` (default `…/telegram-ai-cli/archive.sqlite3`), a
+  separate database from `state.db` so that erasing every archived message
+  cannot take the account registry, the pending plans and the rate-limit history
+  with it. Bounds: 5000 messages per sync call, 50 000 rows scanned per search
+  (streamed off the cursor, not materialised) and a 500-character query ceiling
+  — plus a **10-second `SIGALRM` budget on the matching phase of a regex
+  search**, because those ceilings bound how much is matched and not how long a
+  single match takes, and `re` has no timeout of its own. POSIX and main-thread
+  only; elsewhere the search runs untimed rather than pretending.
+- `Operation` gained `destructive` and `idempotent`, and the MCP adapter reads
+  them instead of publishing a blanket `destructiveHint: false` /
+  `idempotentHint: <is a read>` for every tool. `telegram_archive_forget` is the
+  first to need them, and it is exactly the case where the guess was wrong in
+  both directions. The hints are advisory, which is why a wrong one is worse
+  than none: a client that auto-approves what it was told is harmless acts on
+  the lie.
 
 - `telegram_folders` / `tg-ai folders` — the account's chat folders, which are
   the one grouping in this system a *person* authored: id, name, emoji, the

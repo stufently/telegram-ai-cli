@@ -89,6 +89,25 @@ class Operation:
     handler: Handler | None = None
     planner: Planner | None = None
 
+    destructive: bool = False
+    """Whether running this destroys something that was there before.
+
+    Advisory metadata for MCP clients (``destructiveHint``), not a boundary —
+    but a *wrong* hint is worse than none, because a client may auto-approve
+    what it is told is harmless. Only true for operations that remove data,
+    which today means erasing a chat from the local archive; every remote write
+    is planned and approved by a person, so the hint on a plan tool describes
+    the planning, which destroys nothing.
+    """
+
+    idempotent: bool | None = None
+    """Whether running it twice differs from running it once.
+
+    ``None`` means "derive it from the effect" — a read is idempotent, anything
+    else is assumed not to be. Set explicitly where that guess is wrong: a
+    delete is idempotent without being a read.
+    """
+
     tags: tuple[str, ...] = field(default_factory=tuple)
 
     # -- derived ----------------------------------------------------------
