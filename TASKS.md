@@ -1,107 +1,67 @@
 # Tasks
 
-Backlog only — open and future work, not a progress log. See
-[`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md)
-for the full design these items implement, and `CHANGELOG.md` for what has
-already shipped.
-
-## Core
-
-The safety kernel (`config.py`, `safety.py`, `redact.py`, `render.py`,
-`audit.py`, `limits.py`, `secretbox.py`, `db.py`, `errors.py`, `envelope.py`)
-landed first, per the design's ordering (§11) — read/write operations are
-written against it, not the other way around. Since then, `plans.py`
-(the plan store and state machine), `opspec.py` (the operation registry and
-its startup invariants — see the "no tool may apply a plan" check inside
-`Registry.check_invariants`), `context.py` (`OperationContext`, what every
-operation is handed), `cli.py` (Click, plus the standing `plan
-list/show/apply/reject/schema/mcp` commands) and `mcp_server.py` (the stdio
-adapter) have all landed too. `accounts/` also exists in full (`models.py`,
-`store.py`, `loader.py`, `lock.py`, `api_profile.py`, `fs.py`, `proxy.py`,
-`sources.py`, `paths.py`) — the port from `telegram-save-private-photo-video`
-described in the design's §2/§6.8/§6.9 is done, not just planned.
-
-What's still missing from core:
-
-- [ ] `apply.py` — `cli.py`'s `plan apply` command already imports
-      `from .apply import apply_plan` lazily; the module itself doesn't exist
-      yet. This is the one function that actually re-verifies preconditions
-      and calls Telethon to carry out a plan — see §6.3's "all checks repeat
-      at apply, not only at plan creation."
-- [ ] `ops/accounts.py`, `ops/chats.py`, `ops/messages.py`, `ops/contacts.py`,
-      `ops/admin.py` — the actual read handlers and write planners. Only the
-      shared plumbing exists so far: `ops/_common.py` (the `ReadInput` base,
-      redaction-at-assembly, the Telethon-exception-to-`TelegramAIError`
-      translator) and `ops/_client.py` (the one place that turns an account
-      label into a connected Telethon client). Until these land, `tg-ai` has
-      no read commands and no write commands at all — only `plan
-      list/show/apply/reject`, `schema` and `mcp` exist as CLI commands today,
-      and `tools/list` over MCP returns an empty tool set.
-
-## Tests
-
-None of the twelve test files listed in the design (§10) exist yet. In
-particular, before any operation code lands:
-
-- [ ] `test_safety.py`, `test_denylist.py` — lock down the policy kernel's
-      current behaviour with tests, since it's the piece every later operation
-      depends on.
-- [ ] `test_limits.py` — persistence across a simulated restart, reservation
-      before the network call, release only on the whitelisted exception
-      classes.
-- [ ] `test_audit.py`, `test_redact.py`, `test_render.py` — the two-phase
-      write, the PII patterns, and the ANSI/OSC/bidi stripping, respectively.
-
-Then, once the corresponding code exists:
-
-- [ ] `test_plans.py`, `test_media_fetch.py`, `test_parity.py`,
-      `test_accounts.py`, `test_no_mark_read.py`, `test_no_private_data.py`.
-
-## CI, packaging and distribution
-
-`Dockerfile` (multi-stage, non-root runtime user), `Dockerfile.test`,
-`.dockerignore`, `Makefile` (`make build`, `make test`, `make lint`, `make
-fmt`, `make shell`), `.github/pull_request_template.md` and
-`scripts/smoke_mcp.py` (a real stdio MCP handshake + `tools/list` check, not
-just an import check) already exist.
-
-- [ ] `.github/workflows/ci.yml` — wire up `make lint`, `make test` and
-      `scripts/smoke_mcp.py` across the 3.12/3.13/3.14 matrix, plus the
-      container build check. The pieces it needs to call already exist; the
-      workflow file itself does not yet.
-- [ ] `.github/workflows/release.yml` — tag-triggered only; third-party actions
-      pinned by commit SHA, not by a mutable tag.
-- [ ] `.github/ISSUE_TEMPLATE/*`.
-- [ ] Decide on PyPI and MCP-registry publication (explicitly deferred by the
-      owner in the design, §12.5 — a name claimed there is claimed forever).
+Backlog only — open and future work, not a progress log. What has already
+shipped is in [`CHANGELOG.md`](CHANGELOG.md); the design these items implement
+is
+[`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md).
 
 ## Distribution surface (Claude Code plugin, skills)
 
 - [ ] `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
       `plugin.mcp.json` — so the repo can be added as a Claude Code plugin the
       way `yandex-mcp` and `zabbix-ai-cli` are.
-- [ ] `.claude/skills/<skill>/SKILL.md` — at least one Claude Code skill once
-      there is a stable enough tool surface to write one against.
+- [ ] `.claude/skills/<skill>/SKILL.md` — at least one Claude Code skill now
+      that the tool surface is stable enough to write one against.
 
-## Documentation
+## Known gaps in the CLI surface
 
-- [ ] `docs/operations.md` — one page per operation (read and plan), its
-      inputs, its JSON Schema, and worked examples — referenced from the
-      README's command tables but not yet written.
-- [ ] `docs/configuration.md` — the full `tgai.yaml` reference; the README's
-      Configure section shows the common cases only.
-- [ ] Fill in the GitHub-side items in
-      [`docs/seo-geo-checklist.md`](docs/seo-geo-checklist.md) (topics, About,
-      social preview) — these can't be done from inside the repository.
+- [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in
+      `cli.py` maps a `list[int]` to a single `int` (no `multiple=True`) and a
+      nested model to a string, so `message delete` / `message forward`
+      (`message_ids`), `chat create` (`users`) and `chat promote` (`rights`)
+      cannot be planned from the terminal at all — only through their MCP
+      tools. Either teach the generator repeated options and a JSON form, or
+      say so in `--help` rather than only in `docs/operations.md`.
+- [ ] **`login_and_register` writes the account row before it takes the session
+      lock** (`accounts/login.py`), so a login that then fails on
+      `SessionLocked` has already changed `phone`, `source`, `session_path` and
+      `status` on a row another process is using. `account add` now registers
+      under the lock (`AccountRegistry.register_phone_login`); the login path
+      still needs the same treatment, ideally as one registry method that holds
+      the old auth key's lock across the whole sequence and restores the row on
+      failure.
+- [ ] **An already-authorised session accepts a new `--phone` without checking
+      it.** `interactive_login` is idempotent and returns early, but the row was
+      written before that — so the number is stored as though a login had
+      verified it.
 
-## Housekeeping
+## Decisions
 
-- [ ] Once `opspec.py` exists, add a startup-invariant test asserting the
-      claim this README already makes: no MCP tool applies a plan, `handler`
-      and `planner` are mutually exclusive per operation, and CLI/MCP report
-      identical validation errors for the same bad input (design §4, "parity
-      tests").
+- [ ] Decide on PyPI and MCP-registry publication (explicitly deferred by the
+      owner in the design, §12.5 — a name claimed there is claimed forever).
+- [ ] Decide what to do about `telegram_plan_status(plan_id)` and
+      `telegram_plan_list()`. The design (§5) lists both as tools; the code has
+      neither, and `tg-ai plan list` / `plan show` cover the same ground from
+      the terminal. Either implement them as read tools or strike them from the
+      design — the README no longer claims they exist.
 - [ ] Archive or otherwise resolve the dead `tdata-session-exporter` repo
       mentioned in the design (§2) as a stray duplicate — tracked here because
       it's a decision about a *different* repository, not something this one's
       code can fix.
+
+## For the owner, on GitHub (not fixable from a commit)
+
+From [`docs/seo-geo-checklist.md`](docs/seo-geo-checklist.md), where the
+rationale for each lives:
+
+- [ ] **About → Website** — leave blank until there is a documentation site;
+      don't link a placeholder.
+- [ ] **About → Releases / Packages checkboxes** — tick only once there is
+      something behind them.
+- [ ] **Social preview image** (Settings → General), 1280×640.
+- [ ] **When PyPI publication happens:** re-check `keywords`, `description` and
+      `[project.urls]` in `pyproject.toml`, and register the project on an MCP
+      registry under the same name and description.
+- [ ] **After the first tagged release:** add this repo to the "Related
+      projects" lists in `zabbix-ai-cli` and `yandex-mcp`, which this README
+      already links back to.

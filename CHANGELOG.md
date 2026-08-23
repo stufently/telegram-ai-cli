@@ -97,9 +97,50 @@ before that, breaking changes can happen on any `0.x` release.
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
   `TASKS.md`, `docs/threat-model.md`, `llms.txt`, `CITATION.cff`,
   `docs/seo-geo-checklist.md` and `.env.example`.
+- `tg-ai account add` and `tg-ai account login` — the onboarding the README has
+  always documented and three of the code's own error messages pointed at, now
+  actually registered as operations (`telegram_ai_cli/ops/accounts.py`). `add`
+  registers an account without touching the network, or adopts already-authorised
+  material with `--tdata` / `--session-file`; `login` runs the interactive phone
+  login that `accounts/login.py` had implemented all along, reusing whatever the
+  account's row already knows (phone, proxy, application credentials) so that a
+  re-registration cannot silently drop the proxy an account was signed in through.
+- `Effect.LOCAL_ADMIN`, a fourth effect class for operations that administer this
+  installation's own account inventory. `Registry.check_invariants()` refuses to
+  publish one as an MCP tool, so the two account commands are terminal-only as a
+  checked property rather than as an omission somebody could "fix" later: signing
+  in prompts a person for the code Telegram sent to their phone, and enrolling an
+  account widens the very fleet every allowlist is written against.
+- `docs/operations.md` and `docs/configuration.md` — the per-operation reference
+  (arguments, defaults, effect and the policy each one consults) and the full
+  `tgai.yaml` / `TGAI_*` reference, including the part that cannot be configured
+  at all.
 
 ### Fixed
 
+- `TGAI_`-prefixed environment variables actually override the YAML file, as the
+  README, `.env.example` and the new configuration reference all say they do.
+  `load_settings` passes the file in as init keyword arguments, and
+  pydantic-settings ranks those *above* the environment by default — so
+  `TGAI_PROFILE=readonly` could not take away a `profile: plan` written on disk.
+  `Settings.settings_customise_sources` now puts the environment first, and
+  `tests/test_config.py` covers both directions plus the merge (one override
+  must not empty the allowlists it does not name).
+- Registering an account holds that account's session lock
+  (`AccountRegistry.register_phone_login`), like every other change that can
+  replace a row. Writing over a registration while a client is connected
+  underneath it corrupts the session file that client is using.
+- Error suggestions name a command that exists and can be typed as written:
+  `tg-ai account login --label <name>`, matching the option the generated CLI
+  actually takes (`ops/_client.py`, `accounts/registry.py`). The positional form
+  they used before would have failed with "unexpected extra argument" even once
+  the command existed.
+- README command names now match the CLI: `tg-ai chats` (not `chat list`),
+  `tg-ai fleet` (not `fleet status`), `chat promote` (not `admin promote`); and
+  the MCP tool table no longer lists `telegram_plan_status` and
+  `telegram_plan_list`, which the registry does not publish — `tg-ai plan list`
+  and `plan show` are terminal commands, on the same side of the line as
+  `plan apply`.
 - The MCP adapter is built against the installed SDK's constructor-handler API
   (`Server(..., on_list_tools=..., on_call_tool=...)`) rather than the 1.x
   decorator form, which the low-level `Server` no longer provides. Nothing

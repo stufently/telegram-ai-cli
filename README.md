@@ -16,9 +16,9 @@ This automates a **personal** Telegram account (MTProto), not a bot account (Bot
 ```bash
 tg-ai account add --label work
 tg-ai account login --label work
-tg-ai chat list --search "team"
-tg-ai chat read 123456789 --limit 50
-tg-ai message send 123456789 "On my way"        # writes a plan, sends nothing
+tg-ai chats --search "team"
+tg-ai chat read --chat 123456789 --limit 50
+tg-ai message send --chat 123456789 --text "On my way"   # writes a plan, sends nothing
 tg-ai plan apply 4f0f8a2b9c7e1d3a5b6c7d8e9f0a1b2c
 tg-ai mcp
 ```
@@ -39,15 +39,15 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 
 | Command | Answers |
 | --- | --- |
-| `tg-ai fleet status` | Which accounts are configured, authorized, expired or locked right now |
-| `tg-ai chat list` | Which chats exist, and what their chat id is (search by title) |
+| `tg-ai fleet` | Which accounts are configured, authorized, expired or locked right now |
+| `tg-ai chats` | Which chats exist, and what their chat id is (search by title) |
 | `tg-ai chat read` | What was said in a chat — paged with `--before-id`, with media metadata |
 | `tg-ai inbox` | What's waiting for a reply right now, across every configured account |
 | `tg-ai search` | Which messages match a phrase, and where |
 | `tg-ai whois` | Who a `@username`, a numeric id, or an invite link resolves to |
 | `tg-ai chat members` | Who's in a chat, and who administers it |
 | `tg-ai media fetch` | Save a message's photo, video or document to a server-controlled path |
-| `tg-ai message send` / `chat join` / `admin promote` / … | Validate and save an intent — send, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
+| `tg-ai message send` / `chat join` / `chat promote` / … | Validate and save an intent — send, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
 | `tg-ai plan list` / `plan show <id>` | See what's waiting for a decision, and exactly what applying it would do |
 | `tg-ai plan apply <id>` | Carry out exactly what a saved plan describes |
 | `tg-ai plan reject <id>` | Decline a pending plan |
@@ -65,7 +65,7 @@ Read operations run immediately. Nothing else does — every operation that chan
 A write command never sends anything by itself — it records a plan and tells you how to carry it out:
 
 ```
-$ tg-ai message send 987654321 "Meeting moved to 3pm"
+$ tg-ai message send --chat 987654321 --text "Meeting moved to 3pm"
 {
   "plan_id": "4f0f8a2b9c7e1d3a5b6c7d8e9f0a1b2c",
   "operation": "message.send",
@@ -148,6 +148,8 @@ audit:
 
 `777000` and Saved Messages don't need — and can't get — an entry here; they're closed in [`telegram_ai_cli/config.py`](telegram_ai_cli/config.py), not in this file.
 
+Every key, its default and the rule order the safety kernel applies them in are in the [configuration reference](docs/configuration.md); every command and tool, with its arguments, is in the [operations reference](docs/operations.md).
+
 ## Add the MCP server to your AI client
 
 The MCP client never handles a Telegram credential directly — the server resolves the account's session from local state, not from anything passed over MCP.
@@ -215,18 +217,20 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
 
 ## MCP tools
 
-Eight read tools, twelve plan tools (one per write operation, not a generic `plan_create(operation, params)` — an untyped `params` doesn't show a model the field schema, and it starts inventing argument names), and two tools to track what a plan is doing. **No tool applies a plan.**
+Twenty tools: eight read tools, and twelve plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
-telegram_fleet              telegram_plan_send_message      telegram_plan_join_chat
-telegram_chats               telegram_plan_reply_message     telegram_plan_leave_chat
-telegram_chat_read           telegram_plan_edit_message      telegram_plan_create_group
-telegram_inbox               telegram_plan_delete_message    telegram_plan_invite_user
-telegram_search               telegram_plan_forward_message  telegram_plan_promote_admin
-telegram_whois                telegram_plan_mark_read        telegram_plan_set_profile
+telegram_fleet          telegram_plan_send_message     telegram_plan_join_chat
+telegram_chats          telegram_plan_reply_message    telegram_plan_leave_chat
+telegram_chat_read      telegram_plan_edit_message     telegram_plan_create_group
+telegram_inbox          telegram_plan_delete_message   telegram_plan_invite_user
+telegram_search         telegram_plan_forward_message  telegram_plan_promote_admin
+telegram_whois          telegram_plan_mark_read        telegram_plan_set_profile
 telegram_chat_members
-telegram_media_fetch          telegram_plan_status            telegram_plan_list
+telegram_media_fetch
 ```
+
+`tg-ai account add` and `tg-ai account login` are absent from this list on purpose, and the registry refuses to publish them: signing in asks a person for the code Telegram sent to their phone, and enrolling an account widens the very fleet every allowlist is written against.
 
 `telegram_media_fetch` looks like a read tool but isn't one — it writes a file, so it goes through the same server-controlled path handling as everything else that touches disk: the caller never supplies a path, the file lands under a download root with a generated name (`O_CREAT|O_EXCL|O_NOFOLLOW`, a size cap and a running quota), and only an opaque `artifact_id` comes back.
 
@@ -273,6 +277,8 @@ Every command and every tool call returns the same envelope, whether it's the CL
 
 ## Documentation
 
+- [Operations reference](docs/operations.md) — every command and tool, its arguments and what it consults
+- [Configuration reference](docs/configuration.md) — the full `tgai.yaml`, every environment variable, and what cannot be configured
 - [Security policy](SECURITY.md)
 - [Threat model](docs/threat-model.md)
 - [Design spec](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md)

@@ -38,6 +38,14 @@
 - [SECURITY.md](https://github.com/stufently/telegram-ai-cli/blob/main/SECURITY.md):
   vulnerability reporting (GitHub Security Advisories, not email), scope, and
   the design rationale behind each safety control.
+- [docs/operations.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/operations.md):
+  every operation on both surfaces — the eight read tools, the twelve plan
+  tools, the plan lifecycle commands and the two terminal-only account
+  commands — with arguments, defaults and the policy each one consults.
+- [docs/configuration.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/configuration.md):
+  the full `tgai.yaml` reference and its `TGAI_`-prefixed environment
+  equivalents, including what cannot be configured at all (`777000` and Saved
+  Messages are constants in code, not defaults).
 - [docs/threat-model.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/threat-model.md):
   the full threat model, including the honest limit of the plan/apply
   approval boundary and the path to a stronger one (a separate OS principal,
