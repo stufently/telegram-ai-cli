@@ -1182,8 +1182,12 @@ def _require_ban_list(chat: Resolved, *, what: str) -> None:
     """
     if chat.is_channel:
         return
+    # By id, not by `describe`: that line quotes the chat title, which is
+    # written by whoever runs the chat. In a plan summary it is wrapped and
+    # announced as untrusted; in an error message it would be neither, because
+    # the sentence around it is this project's own. Same rule as `ops/topics.py`.
     raise InvalidInput(
-        f"{describe(chat)} is a basic group: Telegram keeps no ban list and no "
+        f"chat {chat.ref.peer_id} is a basic group: Telegram keeps no ban list and no "
         f"per-member rights there, so {what} does not exist for it",
         suggestion="Plan chat.kick instead, or convert the group to a supergroup first.",
     )
@@ -1389,9 +1393,9 @@ async def _fetch_messages(client: Any, target: Resolved, ids: list[int]) -> list
     if len(found) != len(ids):
         missing = sorted(set(ids) - {int(m.id) for m in found})
         # The chat is named by id, not by `describe`. A title is written by
-        # strangers, and `Envelope.failure` is outside the trust boundary: it
-        # neither wraps nor defangs, so a title quoted here reaches the reader
-        # as an unmarked sentence in the one field it has most reason to trust.
+        # strangers; `Envelope.failure` defangs an error payload, but a value
+        # interpolated into a sentence this project composed is not wrapped —
+        # it would read as our own words in the field a reader trusts most.
         raise InvalidInput(
             f"message(s) {missing} not found in chat {target.ref.peer_id}",
             suggestion="Check the ids; deleted messages cannot be edited or forwarded.",

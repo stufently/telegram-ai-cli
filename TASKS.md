@@ -284,16 +284,35 @@ is
       (`ReactionInvalidError`) rather than as something the plan could have
       known; `messages.getAvailableReactions` and the chat's own
       `available_reactions` are what would answer it.
-- [ ] **`Envelope.failure` is outside the trust boundary.** `telegram_result`
-      wraps and defangs a *successful* payload; an error is assembled from an
-      exception and neither wrapped nor defanged, and `meta.untrusted_content`
-      is not set on it. So any refusal that quotes Telegram-authored text — a
-      chat title, a message body — hands the reader an unmarked stranger's
-      sentence in the one field it has most reason to trust. The forum
-      operations avoid it by naming chats by id (raised by review, 2026-08-23);
-      the general fix is to defang `error.message` / `error.suggestion` where
-      the envelope is built, so it stops depending on every call site
-      remembering.
+- [ ] **A refusal is defanged but never redacted.** `Envelope.failure` now puts
+      the error payload through the trust boundary, but redaction is the other
+      half of `telegram_result` and it did not come along: `redact_mapping` is
+      driven by settings, and the envelope is built in places that hold no
+      `OperationContext`. So a secret shaped value that reaches an error message
+      — an argument echoed back, a filename — is printed as typed. Either the
+      envelope learns the setting, or errors are redacted where they are raised;
+      picking one is a design decision, not a flag.
+- [ ] **A list of strings under a human-authored key is defanged, not
+      delimited.** `wrap_untrusted` wraps a *string* under a name in
+      `UNTRUSTED_FIELDS`; a list under the same name has its elements
+      neutralised like any other string and comes back unmarked. No serializer
+      produces one today, which is the only reason it is not a live gap — the
+      field list is matched by name precisely so that a serializer added later
+      is covered by default, and this is the shape that would slip through
+      (raised by review, 2026-08-23).
+- [ ] **The top-level CLI net cannot honour `--json`.** An error raised outside
+      a command — before the root context exists — is printed by the net in
+      `main()`, which now builds an envelope and renders it sanitized, but has
+      no way to know the caller asked for JSON. A script piping `--json` gets a
+      human line on stderr for that one class of failure. Fixing it means
+      parsing the flag before click does, which is its own small parser.
+- [ ] **`warnings` and `meta.extra` are outside the boundary.** Both are
+      assembled by this project, so today neither carries stranger text, and
+      both are handed to `Envelope.success` unwalked. The wrapping pass cannot
+      simply be extended to cover them: `data` has already been through it, and
+      a second pass would defang the markers the first one wrote. The warning
+      that interpolates a chat title is the one that breaks this, and nothing
+      stops it being written.
 
 - [ ] **Sending a file covers one file, and only the forms an extension
       names.** `message.send_file` takes a single path on purpose — a list

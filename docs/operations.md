@@ -288,9 +288,11 @@ into one list and the messages either side of one are usually not a reply to it.
 one dialog for all of its topics. That is stated in `warnings` rather than left to
 be misread — `chat topics` is where per-topic unread counts live.
 
-Refusals here name the chat by **id, not by title**: an error is built outside
-`telegram_result`, and `Envelope.failure` neither wraps nor defangs what it
-carries, so a quoted title would arrive as unmarked stranger-written text.
+Refusals here name the chat by **id, not by title**. An error payload does go
+through the trust boundary — `Envelope.failure` defangs every string in it and
+delimits a human-authored field such as `details.title` — but a title
+interpolated into the refusal *sentence* is not wrapped, because that sentence
+is this project's own words. An id says which chat without borrowing anybody's.
 
 **Two link shapes are refused rather than interpreted**, in every operation that
 takes one (`chat read`, `search`, `media fetch`, `message reactions`), and the

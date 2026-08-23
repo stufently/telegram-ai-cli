@@ -255,9 +255,10 @@ def guard_topic_filter(
     if topic_id is None:
         return
     if not forum:
-        # By id, never by title: an error is built outside `telegram_result`, and
-        # `Envelope.failure` neither wraps nor defangs — a chat title is written
-        # by a stranger, and this is not a field that can carry one unmarked.
+        # By id, never by title: a chat title is written by a stranger, and
+        # `Envelope.failure` defangs an error but does not wrap the sentence
+        # this project composed — so a title quoted here would read as our own
+        # words. See the same rule spelled out in `ops/topics.py`.
         raise InvalidInput(
             f"{what}: topic {topic_id} was named, but chat {ref.peer_id} is not a "
             "forum — it has no topics, and its messages are one history. Drop topic_id "

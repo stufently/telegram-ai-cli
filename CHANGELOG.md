@@ -1051,3 +1051,29 @@ before that, breaking changes can happen on any `0.x` release.
 - Redaction is applied to email addresses of any domain depth, before the
   card and phone rules — an address is masked whole rather than having a
   numeric local part rewritten as a phone number inside an intact domain.
+- A refusal is inside the trust boundary. A result is assembled by
+  `telegram_result`, which wraps and defangs it; an error was assembled from an
+  exception and went nowhere near that, which left `error` the one field in the
+  response where a stranger's text could arrive carrying its own delimiters —
+  in the part a reader trusts most, because it is normally this project
+  speaking. `Envelope.failure` now walks the error payload through the same
+  pass: every string is defanged, and a value under a human-authored field name
+  (a chat title in `details`) is delimited like any other. The message itself is
+  deliberately **not** wrapped — this project composed that sentence, and
+  delimiting it would claim a stranger wrote our own words — so naming a chat by
+  id rather than by title remains the rule for refusals. `meta.untrusted_content`
+  is set only when something was actually delimited — not merely when the pass
+  changed the payload, because defanging changes it too and leaves no markers
+  behind; announcing them there would send a parser hunting delimiters that were
+  never written.
+- The refusal that says a basic group keeps no ban list named the chat with the
+  line that quotes its **title**. A title is written by whoever runs the chat:
+  in a plan summary it is wrapped and announced as untrusted, in an error
+  message it was neither. It now names the id, like every other refusal.
+- A refusal printed to the terminal is sanitized where it is printed, rather
+  than where it was raised. `_emit` promised in its own docstring that
+  everything printed had been through the sanitizer, and the error branch was
+  the exception — which looked safe only because most refusals are sentences
+  this project composed. Most is not all: a refusal quotes paths and filenames.
+  The top-level safety net in `main()` renders the same way instead of printing
+  the raw message.

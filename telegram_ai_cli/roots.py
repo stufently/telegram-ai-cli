@@ -152,10 +152,9 @@ def require_within_roots(
 
     Both the destination and the roots are operator- or client-controlled
     paths, not text anybody wrote into a chat, so they are named in the
-    message: ``Envelope.failure`` neither wraps nor defangs, and a refusal that
-    will not say which path it refused sends whoever reads it to the wrong
-    place. They still go through ``sanitize_line`` — the message is printed to
-    a terminal.
+    message: a refusal that will not say which path it refused sends whoever
+    reads it to the wrong place. They still go through ``sanitize_line`` — the
+    message is printed to a terminal.
     """
     if roots is None:
         return

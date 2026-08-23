@@ -209,9 +209,9 @@ def build_server(*, config_path: Path | None = None) -> Server:
                 # otherwise reach a tool the operator removed from the surface.
                 #
                 # `name` matched the registry above, so the string quoted here
-                # is one of this project's own constants rather than
-                # caller-supplied text — which is what makes quoting it safe at
-                # all, since `Envelope.failure` neither wraps nor defangs.
+                # is one of this project's own constants and not caller-supplied
+                # text — which is why it can be echoed verbatim instead of
+                # arriving defanged the way stranger text does.
                 matched = op.plan_tool if name == op.plan_tool else op.mcp_tool
                 raise NotAllowlisted(
                     f"{matched} is not published by this server: mcp.tools does not list it",

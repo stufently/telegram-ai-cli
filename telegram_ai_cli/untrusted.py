@@ -134,6 +134,31 @@ def unwrap(text: str | None) -> str | None:
     return text[len(OPEN_MARKER) : -len(CLOSE_MARKER)]
 
 
+def has_untrusted_field(value: Any) -> bool:
+    """Whether walking *value* would actually delimit something.
+
+    :func:`wrap_untrusted` changes a payload in two different ways, and only one
+    of them leaves markers behind: a human-authored field is delimited, while
+    every other string is merely defanged. A caller that announces
+    ``untrusted_markers`` on the strength of "the pass changed the payload"
+    therefore announces them for a payload that was only defanged — sending a
+    parser to hunt for delimiters that were never written. This answers the
+    narrower question the announcement actually depends on.
+
+    Empty values are excluded because :func:`wrap` leaves them alone: markers
+    around nothing would claim content that is not there.
+    """
+    if isinstance(value, dict):
+        return any(
+            (key in UNTRUSTED_FIELDS and isinstance(item, str) and bool(item))
+            or has_untrusted_field(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(has_untrusted_field(item) for item in value)
+    return False
+
+
 def wrap_untrusted(value: Any) -> Any:
     """Walk a JSON-shaped structure, delimiting every human-authored string.
 

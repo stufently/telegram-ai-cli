@@ -1571,9 +1571,10 @@ def _refuse_duplicate(
     can look, and the message says what to look at — when the identical action
     was applied, and which plan did it.
 
-    The chat is named by its numeric id and nothing else.
-    :meth:`Envelope.failure` neither wraps untrusted text nor defangs it, and a
-    chat title is written by whoever runs the chat.
+    The chat is named by its numeric id and nothing else. A chat title is
+    written by whoever runs the chat, and although :meth:`Envelope.failure`
+    now defangs an error payload, it does not mark a value interpolated into
+    the sentence this project composed — so the id is what belongs there.
     """
     digest = _outbound_fingerprint(plan, params, prepared)
     if digest is None:

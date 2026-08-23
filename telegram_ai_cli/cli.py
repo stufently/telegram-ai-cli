@@ -84,13 +84,18 @@ def _emit(envelope: Envelope, *, as_json: bool) -> None:
         return
 
     if not envelope.ok and envelope.error:
+        # Sanitized here rather than trusted to have been sanitized wherever it
+        # was raised. A refusal is the one line printed while somebody is deciding
+        # what to do next, and an error that quotes a value — a path, a filename,
+        # a name a stranger chose — is exactly where an escape sequence would
+        # redraw it.
         click.secho(
-            f"error [{envelope.error['code']}] {envelope.error['message']}",
+            f"error [{envelope.error['code']}] {sanitize(str(envelope.error['message']))}",
             fg="red",
             err=True,
         )
         if suggestion := envelope.error.get("suggestion"):
-            click.secho(f"  {suggestion}", fg="yellow", err=True)
+            click.secho(f"  {sanitize(str(suggestion))}", fg="yellow", err=True)
         return
 
     for warning in envelope.warnings:
@@ -420,7 +425,11 @@ def main() -> None:
     try:
         cli(standalone_mode=True)
     except TelegramAIError as exc:  # pragma: no cover - top-level safety net
-        click.secho(f"error [{exc.code}] {exc.message}", fg="red", err=True)
+        # The net for anything raised outside a command — before the root
+        # context exists, so `--json` cannot be honoured here and the envelope
+        # is not built. What it can do is print the same sanitized text a
+        # refusal inside a command would: this is still a line on a terminal.
+        _emit(Envelope.failure(exc), as_json=False)
         sys.exit(1)
 
 

@@ -24,14 +24,24 @@ Two fields in ``meta`` carry weight beyond bookkeeping:
     wrapped in (see :mod:`telegram_ai_cli.untrusted`), published so that a
     parser can strip them deterministically instead of hard-coding a literal
     that may change.
+
+**A refusal is inside that boundary too.** A result is assembled by
+``ops._common.telegram_result``, which redacts and then wraps; an error is
+assembled from an exception and goes nowhere near it. That left ``error`` the
+one field in the response where a stranger's text could arrive carrying its own
+delimiters — in the part a reader trusts most, because it is normally this
+project speaking. So :meth:`Envelope.failure` walks the error payload through
+the same pass: every string is defanged, and a value under a human-authored
+field name (a chat title in ``details``) is delimited like any other.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Self
 
 from .errors import TelegramAIError
+from .untrusted import CLOSE_MARKER, OPEN_MARKER, has_untrusted_field, wrap_untrusted
 
 TruncationReason = Literal["limit", "budget", "quota", "size"]
 
@@ -128,7 +138,30 @@ class Envelope:
 
     @classmethod
     def failure(cls, exc: TelegramAIError, *, meta: Meta | None = None) -> Self:
-        return cls(ok=False, data=None, meta=meta or Meta(), error=exc.to_dict())
+        """Build a refusal, with the error payload inside the trust boundary.
+
+        The message itself is *not* wrapped: this project composed that
+        sentence, and delimiting it would claim a stranger wrote our own words.
+        Defanging it is what matters — it makes any text quoted inside it
+        incapable of forging a marker.
+
+        The flag is set only when something was actually delimited — not merely
+        when the pass changed the payload. Those are different: a message whose
+        text contained a forged delimiter is defanged and carries no markers
+        afterwards, so announcing them there would send a parser looking for
+        delimiters that were never written, which is the same lie in the other
+        direction as omitting the flag when they were.
+        """
+        raw = exc.to_dict()
+        error = wrap_untrusted(raw)
+        meta = meta or Meta()
+        if has_untrusted_field(raw):
+            meta = replace(
+                meta,
+                untrusted_content=True,
+                untrusted_markers=(OPEN_MARKER, CLOSE_MARKER),
+            )
+        return cls(ok=False, data=None, meta=meta, error=error)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Self:
