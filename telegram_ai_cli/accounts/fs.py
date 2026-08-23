@@ -85,6 +85,31 @@ def require_no_symlink(path: Path) -> Path:
     return path
 
 
+def require_owned(path: Path) -> Path:
+    """Refuse a path this user does not own.
+
+    ``require_private`` answers "can anyone else read it"; this answers "is it
+    mine at all", which is the different question a socket asks. A directory
+    somebody else owns can be renamed or replaced under us between the check and
+    the bind, so a listener placed there is a listener whoever owns the
+    directory chose the location of — and every caller reaching that socket
+    believes it is talking to this tool.
+
+    ``lstat``, not ``stat``: following a link would report the owner of the
+    target while the thing we are about to act on is the link.
+    """
+    try:
+        owner = os.lstat(path).st_uid
+    except OSError as exc:
+        raise InsecurePermissions(f"cannot stat {path}: {exc}") from None
+    if owner != os.geteuid():
+        raise InsecurePermissions(
+            f"{path} is owned by uid {owner}, not by this user (uid {os.geteuid()})",
+            suggestion="Point the state directory somewhere this user owns.",
+        )
+    return path
+
+
 def ensure_private_dir(path: Path) -> Path:
     """Create ``path`` and its parents as ``0700``."""
     try:

@@ -22,14 +22,13 @@ from typing import Any, get_args, get_origin
 import click
 from pydantic import BaseModel
 
-from . import __version__
+from . import __version__, dispatch
 from .context import OperationContext
-from .envelope import Envelope, Meta
+from .envelope import Envelope
 from .errors import TelegramAIError
 from .opspec import REGISTRY, Effect, Operation
 from .plans import PlanState
 from .render import sanitize, sanitize_line
-from .untrusted import CLOSE_MARKER, OPEN_MARKER, wrap
 
 # --------------------------------------------------------------------------
 # Turning a Pydantic model into Click options
@@ -118,31 +117,10 @@ def _run_operation(op: Operation, ctx_obj: dict[str, Any], **kwargs: Any) -> Non
     # those would override the model's own defaults with null.
     raw = {k: v for k, v in kwargs.items() if v is not None}
 
-    try:
-        params = op.parse(raw)
-        with OperationContext.build(actor="cli", config_path=ctx_obj["config"]) as ctx:
-            if op.effect is Effect.REMOTE_WRITE:
-                plan = asyncio.run(op.planner(ctx, params))  # type: ignore[misc]
-                # Marked like the MCP surface's copy of the same answer: a plan
-                # summary quotes chat titles and message bodies somebody else
-                # wrote, and the two surfaces must not disagree about that.
-                envelope = Envelope.success(
-                    {
-                        "plan_id": plan.plan_id,
-                        "operation": plan.operation,
-                        "summary": wrap(sanitize(plan.summary)),
-                        "state": str(plan.state),
-                        "next": f"tg-ai plan apply {plan.plan_id}",
-                    },
-                    meta=Meta(
-                        untrusted_content=True,
-                        untrusted_markers=(OPEN_MARKER, CLOSE_MARKER),
-                    ),
-                )
-            else:
-                envelope = asyncio.run(op.handler(ctx, params))  # type: ignore[misc]
-    except TelegramAIError as exc:
-        envelope = Envelope.failure(exc)
+    # Shared with the MCP server: parsing, the context, and the choice between
+    # running here and running on the account's daemon all live in `dispatch`,
+    # so the two surfaces cannot drift apart about any of them.
+    envelope = dispatch.run(op, raw, actor="cli", config_path=ctx_obj["config"], next_key="next")
 
     _emit(envelope, as_json=as_json)
     if not envelope.ok:
@@ -327,12 +305,112 @@ def schema(operation: str | None) -> None:
 
 
 @cli.command("mcp")
+@click.option(
+    "--http",
+    "over_http",
+    is_flag=True,
+    help="Serve Streamable HTTP on a loopback address instead of stdio.",
+)
+@click.option("--host", default=None, help="Loopback address to bind (default: http.host).")
+@click.option("--port", type=int, default=None, help="Port to bind (default: http.port).")
 @click.pass_context
-def mcp(ctx: click.Context) -> None:
-    """Serve the MCP protocol over stdio."""
-    from .mcp_server import serve
+def mcp(ctx: click.Context, over_http: bool, host: str | None, port: int | None) -> None:
+    """Serve the MCP protocol over stdio, or over loopback HTTP with --http.
 
-    asyncio.run(serve(config_path=ctx.obj["config"]))
+    The HTTP transport refuses to start on anything but a loopback address and
+    refuses to start without a bearer token in `$TGAI_HTTP_TOKEN`. Neither is a
+    default that can be turned off.
+    """
+    if not over_http:
+        if host is not None or port is not None:
+            raise click.UsageError("--host and --port apply to --http only.")
+        from .mcp_server import serve
+
+        asyncio.run(serve(config_path=ctx.obj["config"]))
+        return
+
+    from .http_server import serve_http
+
+    try:
+        asyncio.run(serve_http(config_path=ctx.obj["config"], host=host, port=port))
+    except TelegramAIError as exc:
+        _emit(Envelope.failure(exc), as_json=ctx.obj["json"])
+        raise SystemExit(1) from None
+
+
+@cli.group("daemon")
+def daemon_group() -> None:
+    """Share one account's connection between several local callers."""
+
+
+@daemon_group.command("serve")
+@click.option("--account", required=True, help="Which account this daemon owns.")
+@click.option(
+    "--idle-timeout",
+    type=float,
+    default=None,
+    help="Seconds of inactivity before it stops (default: daemon.idle_timeout_seconds).",
+)
+@click.pass_context
+def daemon_serve(ctx: click.Context, account: str, idle_timeout: float | None) -> None:
+    """Open one account and answer local callers over a Unix socket.
+
+    Runs in the foreground and holds the account's auth key for as long as it
+    lives, so stopping it (Ctrl-C, SIGTERM, or the idle timeout) is what gives
+    the account back. Nothing supervises it and nothing starts it on demand: a
+    client that finds no socket opens the account itself.
+    """
+    from .config import load_settings
+    from .daemon import paths as daemon_paths
+    from .daemon.server import AccountDaemon
+    from .daemon.service import RegistrySession
+
+    settings = load_settings(ctx.obj["config"])
+    try:
+        daemon_paths.prepare_account_dir(settings, account)
+        daemon = AccountDaemon(
+            account=account,
+            socket_path=daemon_paths.socket_path(settings, account),
+            bootstrap_lock_path=daemon_paths.bootstrap_lock_path(settings, account),
+            session=RegistrySession(label=account, config_path=ctx.obj["config"]),
+            idle_timeout=(
+                idle_timeout if idle_timeout is not None else settings.daemon.idle_timeout_seconds
+            ),
+        )
+        outcome = asyncio.run(daemon.serve())
+    except TelegramAIError as exc:
+        _emit(Envelope.failure(exc), as_json=ctx.obj["json"])
+        raise SystemExit(1) from None
+    _emit(Envelope.success({"account": account, "outcome": outcome}), as_json=ctx.obj["json"])
+
+
+@daemon_group.command("status")
+@click.option("--account", required=True, help="Which account to ask about.")
+@click.pass_context
+def daemon_status(ctx: click.Context, account: str) -> None:
+    """Say whether a daemon is answering for this account."""
+    from .config import load_settings
+    from .daemon import client as daemon_client
+    from .daemon import paths as daemon_paths
+
+    settings = load_settings(ctx.obj["config"])
+    path = daemon_paths.socket_path(settings, account)
+    try:
+        reply = asyncio.run(daemon_client.ping(path))
+    except daemon_client.DaemonUnavailable:
+        payload: dict[str, Any] = {"account": account, "running": False, "socket": str(path)}
+    except TelegramAIError as exc:
+        _emit(Envelope.failure(exc), as_json=ctx.obj["json"])
+        raise SystemExit(1) from None
+    else:
+        payload = {
+            "account": account,
+            "running": True,
+            "socket": str(path),
+            "pid": reply.get("pid"),
+            "idle_timeout": reply.get("idle_timeout"),
+        }
+    _emit(Envelope.success(payload), as_json=ctx.obj["json"])
 
 
 def main() -> None:

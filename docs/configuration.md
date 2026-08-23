@@ -606,6 +606,78 @@ they read the key the same way this process does. And the Telethon `.session`
 file *is* the auth key in the clear, by the nature of MTProto session storage;
 `0600` protects it from other users on the host, not from a disk-level backup.
 
+## `daemon`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `daemon.enabled` | `false` | Route a request that names an account to that account's daemon, if one is listening |
+| `daemon.idle_timeout_seconds` | `300` | Stop and remove the socket after this long with nothing to do |
+| `daemon.connect_timeout_seconds` | `2.0` | How long to wait for the socket to accept |
+| `daemon.request_timeout_seconds` | `900.0` | How long to wait for an answer once the request has left |
+
+Off by default, and worth turning on for one reason. An auth key admits exactly
+one connected client — two desynchronise the message sequence and Telegram may
+revoke the session — so every caller takes an exclusive `flock` on the account
+for as long as it holds a connection. A `watch` holds it for up to five minutes,
+and meanwhile everything else aimed at that account is refused outright with
+`SESSION_LOCKED`. With a daemon running, those callers **queue** instead.
+
+Nothing here starts a daemon; a person runs `tg-ai daemon serve --account
+<label>`, and a client that finds no socket opens the account itself exactly as
+before. See [`operations.md`](operations.md#the-account-daemon) for how it
+behaves and what it refuses to be.
+
+`idle_timeout_seconds` is the safety valve rather than a tuning knob: a daemon
+holds the auth key, so one left running after the work is done keeps the account
+locked out of every other process until somebody notices it.
+
+**A daemon serves only callers configured like itself.** It loads its
+configuration once, at start-up, so a caller launched with a *narrower* one —
+`TGAI_PROFILE=readonly`, a tighter allowlist, another config file — would
+otherwise silently borrow the daemon's wider policy. Each request carries a
+fingerprint of the configuration the caller believes it is running under, and a
+daemon that does not match refuses before running anything; the caller then
+opens the account itself, under its own policy. Any difference counts, rather
+than an attempt to judge which differences narrow and which widen. Change the
+configuration, restart the daemon.
+
+## `http`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `http.host` | `127.0.0.1` | Bind address. Must be a **loopback literal** |
+| `http.port` | `8765` | Port |
+| `http.token_env` | `TGAI_HTTP_TOKEN` | Variable holding the bearer token |
+| `http.min_token_length` | `16` | Shortest token accepted |
+| `http.path` | `/mcp` | Where the Streamable HTTP endpoint is served |
+| `http.session_idle_timeout_seconds` | `1800` | Drop an MCP session that has gone this long without a request |
+
+Used only by `tg-ai mcp --http`; the default stdio transport reads none of it.
+Two of these are not really settings, because neither has a value that turns the
+check off:
+
+**`host` must be a loopback literal.** `0.0.0.0`, `::` and any routable address
+are refused at start-up. So is a hostname — including `localhost` — because what
+a name resolves to is decided by a resolver this process does not control, and
+this server reads a personal Telegram account. If a remote client genuinely
+needs it, put an SSH tunnel or a reverse proxy in front and let *that* be the
+thing with an opinion about who may connect.
+
+**A bearer token is mandatory.** There is no unauthenticated mode. `localhost`
+is not a person: every other process and every other user on the machine reaches
+a loopback port too. Like `secrets.key_env`, the configuration holds the *name*
+of the variable and never the token:
+
+```bash
+export TGAI_HTTP_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+tg-ai mcp --http
+```
+
+A missing, malformed and wrong token get byte-for-byte the same bare `401` with
+`WWW-Authenticate: Bearer` and nothing else — no hint about length, prefix or
+validity — and the comparison is `hmac.compare_digest`, so the timing says
+nothing either. The token is never written to a log line, not even truncated.
+
 ## Telethon behaviour
 
 | Key | Default | Meaning |

@@ -184,6 +184,41 @@ before that, breaking changes can happen on any `0.x` release.
   every annotation in it and the classifier is simply untrue. The release
   workflow checks the marker is in the wheel, because it is a zero-byte file
   that nothing else would notice the absence of.
+- **A shared account daemon** — `tg-ai daemon serve --account <label>` and
+  `tg-ai daemon status --account <label>`, off by default behind
+  `daemon.enabled`. One process opens the account, keeps the connection, and
+  answers *named registry operations* over a Unix socket in
+  `<state>/daemon/<label>/sock` (`0600`, in a `0700` directory this user
+  owns), so several local callers queue behind one another instead of the second
+  one being refused with `SESSION_LOCKED`. That refusal was not a corner case: a
+  `telegram_watch` holds the auth key for up to five minutes and locked
+  everything else out of the account for the duration.
+  The socket takes an operation *name*; there is no endpoint that accepts an
+  MTProto method or an attribute of the client, terminal-only account
+  administration is refused over it, and every request is revalidated and runs
+  through the same policy kernel and audit log as a direct call — the daemon
+  replaces the transport and nothing else. Two processes racing to start one end
+  with a single daemon and a client: the claim is made under the existing
+  `SessionLock`, held for the claim only and released once the socket is bound.
+  A socket left behind by a killed daemon is detected and replaced rather than
+  inherited — by whether `connect` succeeds, not by whether a ping comes back,
+  because a daemon too busy to answer is still holding the auth key. It stops on
+  SIGTERM and after `daemon.idle_timeout_seconds` of silence — an abandoned
+  daemon holds the account.
+  A daemon also serves only callers configured like itself: each request carries
+  a fingerprint of the caller's configuration and a mismatch is refused before
+  anything runs, so a process launched with `TGAI_PROFILE=readonly` cannot
+  borrow a daemon started with `plan` (raised by review).
+- **MCP over HTTP** — `tg-ai mcp --http [--host] [--port]`, using the SDK's
+  Streamable HTTP transport (`mcp` 2.0.0). Two conditions, both checked before a
+  socket is opened and neither of them optional: the bind address must be a
+  loopback *literal* (`0.0.0.0`, `::`, a routable address and even a hostname are
+  refused, because what a name resolves to is not decided here), and a bearer
+  token must be present in `$TGAI_HTTP_TOKEN`. There is no unauthenticated mode:
+  localhost is not a person, and every other process on the machine reaches it
+  too. A missing, malformed and wrong token all get byte-for-byte the same bare
+  `401`, compared with `hmac.compare_digest`; the token never appears in a log
+  line, not even truncated. stdio remains the default and is unchanged.
 
 - **A ledger of what has already been sent, so it is not sent again.** The audit
   log records what happened; nothing stopped it happening twice — and the failure

@@ -286,6 +286,62 @@ class SecretsConfig(BaseModel):
     auto_create_key: bool = True
 
 
+class HTTPConfig(BaseModel):
+    """The MCP server's HTTP transport. Loopback only, bearer token required.
+
+    Neither of those is a default that can be turned off, and both are checked
+    at start-up rather than warned about. A server that reads a personal
+    Telegram account is not a thing to expose on a routable address, and "no
+    auth on localhost" means every other process and every other user on the
+    machine can read the account.
+
+    The token is never a config value — only the name of the variable holding
+    it — for the same reason as :class:`SecretsConfig`: a secret in a YAML file
+    is a secret in a backup, in a bug report and in a screen share.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = Field(default=8765, ge=1, le=65535)
+    #: The environment variable holding the bearer token. The *name* of a
+    #: variable, which is the whole point of the field — never the token.
+    token_env: str = "TGAI_HTTP_TOKEN"  # noqa: S105 - a variable name, not a secret
+    #: Shortest token accepted. Not a strength estimate — a bound below which
+    #: the value is plainly not a secret, refused rather than served.
+    min_token_length: int = Field(default=16, ge=16)
+    #: Where the Streamable HTTP endpoint is mounted.
+    path: str = "/mcp"
+    #: Drop a session that has gone this long without a request. The SDK's own
+    #: default is "never", which keeps a transport and a task per session for
+    #: the life of the process — and a session is created by any accepted
+    #: request, so an abandoned client leaks one until a restart.
+    session_idle_timeout_seconds: float = Field(default=1800.0, gt=0)
+
+
+class DaemonConfig(BaseModel):
+    """A local daemon that owns one account's client so callers can share it.
+
+    Off by default, and opt-in for a reason: without it every caller opens the
+    account itself and holds the auth key for the duration, which is simple and
+    correct. The daemon is what makes two callers queue instead of the second
+    one being refused with `SESSION_LOCKED` — worth having when a five-minute
+    `watch` is running, unnecessary otherwise.
+
+    Nothing here starts a daemon. A person runs `tg-ai daemon serve --account`;
+    a client that finds no socket falls back to opening the account itself.
+    """
+
+    enabled: bool = False
+    #: Shut down and remove the socket after this long with nothing to do. A
+    #: daemon holds the auth key, so an abandoned one locks the account out of
+    #: every other process until someone notices.
+    idle_timeout_seconds: int = Field(default=300, ge=10)
+    #: A socket on this machine answers at once or is not there.
+    connect_timeout_seconds: float = Field(default=2.0, gt=0)
+    #: How long to wait for an answer once the request has left. Generous: the
+    #: work would otherwise be running in this process with no timeout at all.
+    request_timeout_seconds: float = Field(default=900.0, gt=0)
+
+
 class SafetyConfig(BaseModel):
     read: ReadPolicy = Field(default_factory=ReadPolicy)
     write: WritePolicy = Field(default_factory=WritePolicy)
@@ -320,6 +376,8 @@ class Settings(BaseSettings):
     transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+    daemon: DaemonConfig = Field(default_factory=DaemonConfig)
+    http: HTTPConfig = Field(default_factory=HTTPConfig)
 
     #: Telethon retries and sleeps through flood waits on its own, which can
     #: resend a message we decided not to resend. We drive retries ourselves.

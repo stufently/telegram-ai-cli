@@ -589,8 +589,13 @@ While a watch is running, anything else reaching for the same account (another
 `SESSION_LOCKED` naming the holding pid, and it fails immediately rather than
 queueing. This is not a bug introduced here — every operation holds the same
 lock — but a watch holds it for *minutes* rather than the fraction of a second
-a read takes, which turns a theoretical collision into a routine one. Three
-consequences worth planning around:
+a read takes, which turns a theoretical collision into a routine one.
+
+**Running [an account daemon](#the-account-daemon) is the way out of the
+immediate refusal**: with one, callers that name the account queue behind the
+watch instead of being turned away. It does not make the wait shorter — the
+client is still one connection and requests still run one at a time — so the
+three consequences below stand either way:
 
 - **The 300-second ceiling is partly this.** A longer wait would be more
   efficient in tool calls and would make the account unusable for that long.
@@ -1583,3 +1588,137 @@ Registering or replacing a row is done under the account's session lock, the
 same one a running client holds: replacing an account's registration while
 something is connected underneath it is how a session file gets corrupted by its
 own reader.
+
+---
+
+## The account daemon
+
+An auth key admits exactly one connected client, so every caller takes an
+exclusive `flock` on the account for as long as it holds a connection, and
+anything else reaching for that account is refused with `SESSION_LOCKED`
+immediately rather than queueing. A `watch` holds the key for up to five
+minutes; two editors open on one account means one of them simply does not work.
+
+The daemon changes who holds the key, not how many hold it. One process opens
+the account, keeps the connection, and answers named operations over a Unix
+socket. Callers then queue.
+
+```bash
+tg-ai daemon serve --account work          # foreground; Ctrl-C or SIGTERM stops it
+tg-ai daemon status --account work         # pid, socket, idle timeout
+```
+
+It is **opt-in**: set `daemon.enabled: true` (see
+[Configuration](configuration.md#daemon)) for callers to use it. With it off, or
+with no daemon listening, everything behaves exactly as before — a client that
+finds no socket opens the account itself.
+
+### What gets routed
+
+A request is sent to the daemon when all of these hold, and runs locally
+otherwise:
+
+- `daemon.enabled` is true;
+- the request **names an account** (`--account` / the `account` argument);
+- a daemon for that account answers on its socket;
+- and that daemon was started under the **same configuration** as the caller.
+
+The middle condition is not a limitation to work around. A daemon serves one
+account, so a fleet-wide call with no `account` — `telegram_inbox` sweeping
+every permitted account, say — would come back covering one of them under a name
+that promises all of them. Those run locally, and hit `SESSION_LOCKED` against a
+busy account exactly as they did before.
+
+Once a request has left, a failure is a failure: the fallback to running locally
+happens only when nothing answered the connection. Retrying a plan operation
+after a mid-flight timeout is how one plan becomes two.
+
+**`tg-ai plan apply` is not routed, and cannot be.** Applying is deliberately
+not a registered operation — it is the one thing a person does at a terminal —
+so it is not something the socket can run, and it opens the account itself. With
+a daemon holding that account, applying fails with `SESSION_LOCKED`: stop the
+daemon first, or let the idle timeout stop it. Giving the socket an apply
+endpoint is precisely the shortcut the approval design exists to forbid.
+
+### What it is not
+
+- **Not a trust boundary that can be skipped.** Arguments are revalidated inside
+  the daemon, and the operation runs through the same registry, the same policy
+  kernel — `HARD_DENIED_PEERS` and the allowlists included — and the same audit
+  log as a direct call, with the calling surface recorded as the actor. The
+  socket replaces the transport and nothing else.
+- **Not a way to run under a different policy.** The daemon reads its
+  configuration once, when it starts. Each request carries a fingerprint of the
+  caller's, and one that does not match is refused before anything runs — so a
+  process launched with `TGAI_PROFILE=readonly` cannot borrow a daemon started
+  with `plan`. See [Configuration](configuration.md#daemon).
+- **Not an RPC surface.** The protocol has two verbs, `ping` and `run`, and
+  `run` carries the *name* of a registered operation. There is no endpoint that
+  accepts an MTProto method or an attribute path on the client; an unknown name
+  is `UNKNOWN_OPERATION`, which is what every method name and every attribute
+  is. `local_admin` operations are refused over it as well — signing an account
+  in prompts a person, and a socket cannot be prompted. Nothing applies a plan,
+  here or anywhere else that is not a terminal.
+- **Not a supervisor.** Nothing restarts it and nothing spawns it on demand.
+
+### The socket, the race and the shutdown
+
+The socket is `<paths.state>/daemon/<label>/sock`, mode `0600`, in a `0700`
+directory this user owns — checked, not assumed, because whoever owns the
+directory chooses what the file at that path is. A path that is a symlink, or an
+existing file that is not a socket, is refused rather than cleaned up. A Unix
+socket address is a fixed 108-byte field, so a path over the limit is refused by
+name at start-up rather than failing inside `bind` with "AF_UNIX path too long";
+a long account label under a deep `paths.state` is the way to hit it.
+
+Two processes starting a daemon at the same moment end with one daemon and one
+client. The claim is made under the same `SessionLock` the account loader uses,
+held for the claim only and released as soon as the socket is bound and the
+account is open; from then on it is the live socket, not the lock, that stops a
+second daemon. The loser returns "already running" rather than failing.
+
+A socket left behind by a killed daemon is detected and replaced. It is never
+inherited: `bind` on an existing path fails, and trusting it would send every
+client into a black hole. Staleness is decided by whether `connect` succeeds and
+deliberately not by whether a ping comes back — a daemon busy enough to miss a
+ping is still holding the auth key, and deleting its socket would leave it
+running and unreachable.
+
+It stops on SIGTERM or SIGINT, and after `daemon.idle_timeout_seconds` with no
+requests. The idle timeout matters more than it looks: a daemon holds the auth
+key, so one left running keeps the account locked out of every other process.
+The socket is unlinked while the listener is still bound, so shutting one down
+can never remove a successor's.
+
+Requests are **serialised inside the daemon** — the Telethon client underneath
+is one connection, and overlapping requests on it are the thing the lock on disk
+exists to prevent. Accepting and framing are not: each connection is handled in
+its own task, so a slow operation delays the operations behind it and blocks
+nothing else, and `tg-ai daemon status` answers during a five-minute watch.
+
+---
+
+## MCP over HTTP
+
+`tg-ai mcp` speaks stdio, which is the transport this project was built around:
+the client launches the server and there is nothing on a network to find. When
+that is not possible — a client in a container, an editor that only takes a URL
+— `tg-ai mcp --http` serves the SDK's Streamable HTTP transport instead.
+
+```bash
+export TGAI_HTTP_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+tg-ai mcp --http                      # http://127.0.0.1:8765/mcp
+tg-ai mcp --http --port 9001
+```
+
+The client sends `Authorization: Bearer $TGAI_HTTP_TOKEN`. Two conditions are
+checked before a socket is opened, and neither can be turned off: the bind
+address must be a loopback literal, and the token must be present. A hostname is
+refused as well as a routable address — `localhost` included — because what a
+name resolves to is decided by a resolver this process does not control. Put a
+tunnel in front if a remote client needs one, and let that be the thing with an
+opinion about who may connect. The details, and why there is no "no auth on
+localhost" mode, are in [Configuration](configuration.md#http).
+
+The tool surface is identical to stdio's. A transport does not widen anything:
+the same operations, the same policy, and still no tool that applies a plan.

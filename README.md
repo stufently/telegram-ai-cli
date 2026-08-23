@@ -64,6 +64,8 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai plan list` / `plan show <id>` | See what's waiting for a decision, and exactly what applying it would do |
 | `tg-ai plan apply <id>` | Carry out exactly what a saved plan describes |
 | `tg-ai plan reject <id>` | Decline a pending plan |
+| `tg-ai daemon serve --account <label>` | Hold one account open so several local callers share it instead of the second one being refused |
+| `tg-ai mcp` / `tg-ai mcp --http` | Serve MCP over stdio, or over loopback HTTP with a mandatory bearer token |
 
 ## Safety
 
@@ -241,6 +243,41 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
   }
 }
 ```
+
+### HTTP instead of stdio
+
+Every block above launches the server over stdio, which is the default and needs
+no port. For a client that can only take a URL:
+
+```bash
+export TGAI_HTTP_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+tg-ai mcp --http        # Streamable HTTP on http://127.0.0.1:8765/mcp
+```
+
+The client sends `Authorization: Bearer $TGAI_HTTP_TOKEN`. Two things are
+refused at start-up rather than warned about: a bind address that is not a
+loopback literal (`0.0.0.0`, a routable address, and a hostname — even
+`localhost`, because what a name resolves to is not decided here), and a missing
+token. There is no unauthenticated mode: a loopback port is reachable by every
+other process and every other user on the machine. Put an SSH tunnel in front if
+a remote client needs one. See
+[`docs/configuration.md`](docs/configuration.md#http).
+
+### Sharing one account between several clients
+
+A Telegram session is a single auth key, so a connected client holds an
+exclusive lock on the account and everything else gets `SESSION_LOCKED` at once
+rather than waiting — which bites as soon as a `tg-ai watch` is running or two
+editors are open on the same account. Turn on `daemon.enabled` and run:
+
+```bash
+tg-ai daemon serve --account work
+```
+
+One process then holds the connection and callers queue behind each other. It is
+opt-in, nothing supervises it, and a client that finds no daemon opens the
+account itself exactly as before. See
+[`docs/operations.md`](docs/operations.md#the-account-daemon).
 
 ## MCP tools
 

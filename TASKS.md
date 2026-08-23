@@ -203,21 +203,51 @@ is
       of nearby hits instead of two calls per hit — worth doing only if the
       argument turns out to be used with large `limit`s.
 
-- [ ] **A watch monopolises its account's session for the whole wait.**
-      `telegram_watch` keeps a client open for up to 300s, and `accounts/lock.py`
-      holds an exclusive `flock` per auth key for as long as a client is open —
-      so anything else reaching for that account meanwhile fails immediately with
-      `SESSION_LOCKED`. Every operation takes the same lock; a watch is the first
-      one that holds it for minutes rather than milliseconds, which is why the
-      ceiling is five minutes. Documented in `docs/operations.md`. Fixing it
-      properly means either a multiplexing client shared across operations, or a
-      way to hand the connection over — both bigger than this operation, and
-      neither is safe to fake: two connections on one auth key can get the
-      session revoked.
+- [ ] **A watch still occupies its account for the whole wait, daemon or not.**
+      The immediate refusal is fixed — with `daemon.enabled` and `tg-ai daemon
+      serve --account <label>`, callers that name the account queue behind the
+      watch instead of getting `SESSION_LOCKED` (see
+      `docs/operations.md#the-account-daemon`). What is *not* fixed is the
+      occupancy: the daemon serialises requests, because the Telethon client
+      underneath is one connection, so a caller behind a 300-second watch waits
+      up to 300 seconds. Making a read overtake a watch means either interrupting
+      the watch's own `client.run_until_disconnected`-style wait or issuing
+      concurrent requests on one client — the second is what the lock exists to
+      prevent, and the first needs the watch to be cancellable, which it is not.
+      The five-minute ceiling is still the mitigation.
+- [ ] **Nothing routes a fleet-wide call through the daemons.** `dispatch`
+      routes a request only when it *names* an account, so `telegram_inbox` with
+      no `account` opens every permitted account itself and hits `SESSION_LOCKED`
+      on any that a daemon holds. Narrowing it silently to the one daemon's
+      account would be worse — an answer covering one account under a name that
+      promises all of them — so the honest fix is a fan-out that asks each
+      account's daemon in turn and falls back per account, which is a second
+      scheduling policy nobody has asked for yet.
+- [ ] **The daemon accepts unbounded concurrent connections.** Each connection
+      is one task and one request, and a peer that connects without sending is
+      dropped after 30 seconds — but nothing caps how many may be open at once.
+      The socket is `0600` in a `0700` directory, so the only caller who can do
+      this is the user who owns the account already; a semaphore and a "busy"
+      response would be the fix if that ever stops being true.
+- [ ] **`tg-ai plan apply` cannot use a daemon.** Applying is deliberately not a
+      registered operation, so it is not something the socket can run — and it
+      opens the account itself, which means applying a plan while a daemon holds
+      that account fails with `SESSION_LOCKED`. Stop the daemon, or wait for the
+      idle timeout. Giving the socket an apply endpoint is exactly the shortcut
+      the approval design exists to forbid, so the fix, if one is wanted, is a
+      way for the daemon to *hand the account back* rather than a new endpoint.
 - [ ] **A watch does not cover the fleet.** `telegram_inbox` sweeps every
       permitted account; `telegram_watch` uses exactly one, because watching *n*
       accounts would hold *n* session locks for the duration. Waiting on several
-      accounts at once needs the lock question above answered first.
+      accounts at once needs the occupancy question above answered first — a
+      daemon per account makes it possible to *reach* them, not to wait on them
+      concurrently.
+- [ ] **The HTTP transport has no rate limit and no request-size ceiling of its
+      own.** It relies on the SDK's `max_request_body_size` (4 MiB by default)
+      and on the bearer token being secret. Fine for a loopback port that only
+      this user's processes reach; worth revisiting if it is ever put behind a
+      reverse proxy, together with whether the token should be rotatable without
+      a restart.
 - [ ] **Most plan operations still do not accept a `t.me` message link.** The
       four marks (`message.react` / `unreact` / `pin` / `unpin`) do:
       `ops/marks.resolve_message` parses the link with

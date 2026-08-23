@@ -29,6 +29,12 @@ does not publish is a configuration error, not a new tool.
 **Client roots.** An operation that writes to this machine is refused if the
 configured download directory is outside every directory the client sanctioned.
 See :mod:`telegram_ai_cli.roots`.
+
+Once both have passed, running the operation is
+:func:`telegram_ai_cli.dispatch.execute` — the same function the CLI calls, which
+is also what decides whether the work happens here or on the account's daemon.
+Neither the gate nor the roots check is reachable from inside it: they are
+conditions on being allowed to call it at all.
 """
 
 from __future__ import annotations
@@ -43,14 +49,14 @@ from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
 from mcp.server.stdio import stdio_server
 
+from . import dispatch
 from .config import Settings, load_settings
-from .context import OperationContext
-from .envelope import Envelope, Meta
+from .envelope import Envelope
 from .errors import InvalidInput, NotAllowlisted, ProfileForbidden, TelegramAIError
 from .opspec import REGISTRY, Effect, Operation
-from .render import sanitize, sanitize_line
+from .render import sanitize_line
 from .roots import require_sanctioned_path
-from .untrusted import CLOSE_MARKER, OPEN_MARKER, wrap
+from .untrusted import CLOSE_MARKER, OPEN_MARKER
 
 SERVER_NAME = "telegram-ai-cli"
 
@@ -216,53 +222,43 @@ def build_server(*, config_path: Path | None = None) -> Server:
                     ),
                 )
 
-            params = op.parse(arguments or {})
+            if op.effect is Effect.LOCAL_WRITE:
+                # Every effect that writes to this machine, checked against the
+                # path that operation actually writes — media.fetch fills
+                # paths.downloads, the archive operations write paths.archive.
+                # Keyed on the effect so a new local write cannot skip the
+                # check, and on the operation's own `local_path` so it is not
+                # checked against somebody else's directory, which is what
+                # taking paths.downloads for all three did.
+                #
+                # Against the startup `settings` rather than a per-call context:
+                # the same object the gate above was built from, and for the
+                # same reason — where this server may write is a process fact,
+                # not something that may change between two calls in a session.
+                await require_sanctioned_path(
+                    getattr(request_ctx, "session", None),
+                    _local_destination(op, settings),
+                    what=op.name,
+                )
 
-            with OperationContext.build(actor="mcp", config_path=config_path) as ctx:
-                if op.effect is Effect.LOCAL_WRITE:
-                    # Every effect that writes to this machine, checked against
-                    # the path that operation actually writes — media.fetch
-                    # fills paths.downloads, the archive operations write
-                    # paths.archive. Keyed on the effect so a new local write
-                    # cannot skip the check, and on the operation's own
-                    # `local_path` so it is not checked against somebody else's
-                    # directory, which is what taking paths.downloads for all
-                    # three did.
-                    await require_sanctioned_path(
-                        getattr(request_ctx, "session", None),
-                        _local_destination(op, ctx.settings),
-                        what=op.name,
-                    )
+            if op.is_remote_write and name != op.plan_tool:
+                # Reachable only if a write ever grew a direct tool name; the
+                # registry forbids it, and this is the belt.
+                raise ProfileForbidden(f"{name} cannot be executed over MCP; use {op.plan_tool}")
 
-                if op.is_remote_write:
-                    if name != op.plan_tool:
-                        # Reachable only if a write ever grew a direct tool name;
-                        # the registry forbids it, and this is the belt.
-                        raise ProfileForbidden(
-                            f"{name} cannot be executed over MCP; use {op.plan_tool}"
-                        )
-                    plan = await op.planner(ctx, params)  # type: ignore[misc]
-                    # A plan summary quotes Telegram-authored text — the title
-                    # of the destination chat, the body of the message being
-                    # edited. It is built here rather than by `telegram_result`,
-                    # so it needs the boundary applied explicitly; without it,
-                    # a hostile chat title reached the model unmarked through
-                    # the one tool family that is *about* to act on it.
-                    envelope = Envelope.success(
-                        {
-                            "plan_id": plan.plan_id,
-                            "operation": plan.operation,
-                            "summary": wrap(sanitize(plan.summary)),
-                            "state": str(plan.state),
-                            "how_to_apply": (f"A person must run: tg-ai plan apply {plan.plan_id}"),
-                        },
-                        meta=Meta(
-                            untrusted_content=True,
-                            untrusted_markers=(OPEN_MARKER, CLOSE_MARKER),
-                        ),
-                    )
-                else:
-                    envelope = await op.handler(ctx, params)  # type: ignore[misc]
+            # Parsing, the context, and the choice between running here and
+            # running on the account's daemon are shared with the CLI, so the
+            # two surfaces cannot answer the same call differently. Everything
+            # above this line — the visibility gate and the roots check — has
+            # already run, and neither is reachable from inside `dispatch`.
+            outcome = await dispatch.execute(
+                op, arguments or {}, actor="mcp", config_path=config_path
+            )
+            envelope = dispatch.render(
+                outcome,
+                next_key="how_to_apply",
+                next_step="A person must run: tg-ai plan apply {plan_id}",
+            )
 
         except TelegramAIError as exc:
             # Returned as tool content rather than a protocol error, so the

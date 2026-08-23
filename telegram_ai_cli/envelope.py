@@ -77,6 +77,34 @@ class Meta:
         payload.update(self.extra)
         return payload
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> Meta:
+        """Rebuild meta that has been through JSON.
+
+        Needed because a result may now arrive from the account daemon rather
+        than from a handler in this process. Anything not a declared field goes
+        back into ``extra``, so a round trip neither invents fields nor drops
+        the ones an operation added.
+        """
+        data = dict(payload or {})
+        markers = data.pop("untrusted_markers", None)
+        known = {
+            name: data.pop(name)
+            for name in ("returned", "total", "truncated", "truncated_reason", "account")
+            if name in data
+        }
+        redacted = bool(data.pop("redacted", False))
+        untrusted = bool(data.pop("untrusted_content", False))
+        return cls(
+            **known,
+            redacted=redacted,
+            untrusted_content=untrusted,
+            untrusted_markers=(
+                (markers["open"], markers["close"]) if isinstance(markers, dict) else None
+            ),
+            extra=data,
+        )
+
 
 @dataclass(slots=True)
 class Envelope:
@@ -101,6 +129,24 @@ class Envelope:
     @classmethod
     def failure(cls, exc: TelegramAIError, *, meta: Meta | None = None) -> Self:
         return cls(ok=False, data=None, meta=meta or Meta(), error=exc.to_dict())
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Self:
+        """The inverse of :meth:`to_dict`, for a result that arrived over a socket.
+
+        Used by the account-daemon client: the daemon ran the operation and
+        assembled the envelope, and this rebuilds it so both surfaces print the
+        same object whether the work happened here or one process away.
+        """
+        meta = Meta.from_dict(payload.get("meta"))
+        if payload.get("ok"):
+            return cls(
+                ok=True,
+                data=payload.get("data"),
+                warnings=list(payload.get("warnings") or []),
+                meta=meta,
+            )
+        return cls(ok=False, data=None, meta=meta, error=dict(payload.get("error") or {}))
 
     def to_dict(self) -> dict[str, Any]:
         if self.ok:
