@@ -37,16 +37,18 @@ python
 automation
 ```
 
-- [ ] Add the topics above (or the current equivalent list, if the pitch has
-      moved on).
+- [x] Add the topics above (or the current equivalent list, if the pitch has
+      moved on). *(Done 2026-08-23 via `gh repo edit --add-topic`; all 15
+      applied. This needs no UI visit — `gh` reaches the same settings.)*
 
 ## About panel
 
 Click the gear icon next to **About** on the repo home page and fill in:
 
-- [ ] **Description** — one line, matching the README's title tagline:
+- [x] **Description** — one line, matching the README's title tagline:
       "CLI and MCP server for AI agents to read and act on a personal Telegram
       account over MTProto, with plan-and-apply approval."
+      *(Done 2026-08-23 via `gh repo edit --description`.)*
 - [ ] **Website** — leave blank unless/until there's a documentation site;
       don't link a placeholder.
 - [ ] Check the **Releases** and **Packages** boxes only once there's
