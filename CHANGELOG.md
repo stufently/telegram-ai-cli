@@ -932,6 +932,16 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **The MCP smoke test outgrew its own read buffer.** `scripts/smoke_mcp.py`
+  reads one JSON-RPC message per line with `StreamReader.readline`, whose
+  default limit is 64 KiB — and a `tools/list` answer carries the description
+  and the full input schema of every published tool. Crossing fifty tools put
+  the line over the limit, and the CI job died on `ValueError: Separator is
+  found, but chunk is longer than limit`: a message that reads like a protocol
+  fault and is in fact this script's buffer. The subprocess is now given an
+  explicit 8 MiB limit, with the reason written beside it, because the next
+  fifty tools would otherwise reintroduce it.
+
 - **One pinned action SHA was not a commit.** `release.yml` pinned
   `softprops/action-gh-release` to `fe965f7a…`, labelled `v3.0.2` and listed as
   verified. That object does exist — it is the **annotated tag object** for

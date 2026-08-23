@@ -34,6 +34,11 @@ REQUEST_TIMEOUT = float(os.environ.get("SMOKE_REQUEST_TIMEOUT", "15"))
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 
+#: How much of one JSON-RPC line this script is willing to buffer. See the
+#: comment beside `create_subprocess_exec`: the default 64 KiB is smaller than
+#: a `tools/list` answer once the registry passes about fifty tools.
+STDOUT_LIMIT = 8 * 1024 * 1024
+
 
 def _fail(message: str) -> NoReturn:
     print(f"SMOKE FAIL: {message}", file=sys.stderr)
@@ -113,6 +118,14 @@ async def main() -> None:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # One JSON-RPC message per line, and `tools/list` is one line
+            # carrying the description and the full input schema of every
+            # published tool. asyncio's default StreamReader limit is 64 KiB,
+            # past which `readline` raises "Separator is found, but chunk is
+            # longer than limit" — which reads like a protocol fault and is in
+            # fact only this script's buffer. The suite crossed 64 KiB at around
+            # fifty tools; the ceiling here is set well clear of the next fifty.
+            limit=STDOUT_LIMIT,
         )
     except OSError as exc:
         _fail(f"could not launch `{binary} mcp`: {exc}")
