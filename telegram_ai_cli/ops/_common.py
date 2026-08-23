@@ -10,9 +10,12 @@ allowlisted. So the unconditional part of the kernel's floor (Service
 Notifications, Saved Messages) is available here as a predicate that listing
 code can apply per row. It duplicates a rule; it does not invent one.
 
-**Redaction happens once, at the point results are assembled.** Doing it in a
-helper that also sets ``redacted`` and ``untrusted_content`` means a field added
-to a payload later is covered by default instead of by memory.
+**Redaction and the trust boundary happen once, at the point results are
+assembled.** Doing both in a helper that also sets ``redacted`` and
+``untrusted_content`` means a field added to a payload later is covered by
+default instead of by memory. They answer different questions — redaction is
+about privacy, the markers are about a model mistaking a stranger's sentence
+for an instruction — and neither substitutes for the other, so both run.
 
 **Sanitising is deliberately NOT done here.** Control-character stripping is a
 rendering concern: the CLI applies it when printing and ``--raw`` opts out. If
@@ -42,6 +45,7 @@ from ..errors import (
 )
 from ..redact import redact_mapping
 from ..safety import Capability, PeerKind, PeerRef
+from ..untrusted import CLOSE_MARKER, OPEN_MARKER, wrap_untrusted
 
 #: Hard ceiling on any page of Telegram objects, published in every schema that
 #: has a ``limit``. A caller that wants more pages with ``before_id`` rather
@@ -147,14 +151,21 @@ def telegram_result(
 ) -> Envelope:
     """Wrap a payload that contains text written by strangers.
 
-    Two flags travel with it. ``untrusted_content`` tells a model that message
-    bodies, titles and display names are data and not instructions.
-    ``truncated`` says the answer was cut — without it, a short list reads as
-    "that is all there is", which is the failure mode that makes an agent
-    conclude a chat is empty when it merely paged.
+    Three things travel with it. ``untrusted_content`` tells a model that
+    message bodies, titles and display names are data and not instructions, and
+    the markers around those values inside ``data`` say *which spans* they are —
+    the flag alone only says "somewhere in this document", which is not a
+    boundary. ``truncated`` says the answer was cut — without it, a short list
+    reads as "that is all there is", which is the failure mode that makes an
+    agent conclude a chat is empty when it merely paged.
+
+    Order matters: redaction runs first, and the markers go on last. A secret is
+    masked whether or not it sits in a marked field, and nothing that runs after
+    the wrapping can reintroduce a delimiter into the content it framed.
     """
     redacted = redaction_enabled(ctx.settings)
     body = redact_mapping(data) if redacted else data
+    body = wrap_untrusted(body)
     meta = Meta(
         returned=returned,
         total=total,
@@ -163,6 +174,7 @@ def telegram_result(
         account=account,
         redacted=redacted,
         untrusted_content=True,
+        untrusted_markers=(OPEN_MARKER, CLOSE_MARKER),
         extra=extra or {},
     )
     return Envelope.success(body, warnings=warnings or [], meta=meta)

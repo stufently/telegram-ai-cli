@@ -24,11 +24,12 @@ from pydantic import BaseModel
 
 from . import __version__
 from .context import OperationContext
-from .envelope import Envelope
+from .envelope import Envelope, Meta
 from .errors import TelegramAIError
 from .opspec import REGISTRY, Effect, Operation
 from .plans import PlanState
 from .render import sanitize, sanitize_line
+from .untrusted import CLOSE_MARKER, OPEN_MARKER, wrap
 
 # --------------------------------------------------------------------------
 # Turning a Pydantic model into Click options
@@ -122,14 +123,21 @@ def _run_operation(op: Operation, ctx_obj: dict[str, Any], **kwargs: Any) -> Non
         with OperationContext.build(actor="cli", config_path=ctx_obj["config"]) as ctx:
             if op.effect is Effect.REMOTE_WRITE:
                 plan = asyncio.run(op.planner(ctx, params))  # type: ignore[misc]
+                # Marked like the MCP surface's copy of the same answer: a plan
+                # summary quotes chat titles and message bodies somebody else
+                # wrote, and the two surfaces must not disagree about that.
                 envelope = Envelope.success(
                     {
                         "plan_id": plan.plan_id,
                         "operation": plan.operation,
-                        "summary": sanitize(plan.summary),
+                        "summary": wrap(sanitize(plan.summary)),
                         "state": str(plan.state),
                         "next": f"tg-ai plan apply {plan.plan_id}",
-                    }
+                    },
+                    meta=Meta(
+                        untrusted_content=True,
+                        untrusted_markers=(OPEN_MARKER, CLOSE_MARKER),
+                    ),
                 )
             else:
                 envelope = asyncio.run(op.handler(ctx, params))  # type: ignore[misc]

@@ -15,6 +15,13 @@ message that legitimately spans lines should still read like one.
 Bidirectional overrides get the same treatment. They do not move the cursor,
 they reverse the visual order of a run of text, which is enough to make a
 domain or a phone number render as something other than what it is.
+
+One more class of character is defanged here for a different reason: the
+delimiters :mod:`telegram_ai_cli.untrusted` uses to frame stranger-written
+text. Anything rendered through this module — a plan summary, a warning, a
+table cell — gets no wrapper of its own, so without this a forged
+``⟦/untrusted⟧`` inside a chat title would reach a reader looking exactly like
+the real frame closing.
 """
 
 from __future__ import annotations
@@ -30,6 +37,12 @@ _BIDI_CONTROLS = frozenset("‪‫‬‭‮⁦⁧⁨⁩‎‏")
 
 #: Zero-width characters, used to hide text rather than to move it.
 _INVISIBLE = frozenset("​‌‍⁠﻿")
+
+#: The delimiters :mod:`telegram_ai_cli.untrusted` frames stranger-written text
+#: with. They are defanged here too, so that a forged marker cannot survive on
+#: the paths that render text for a terminal — a plan summary, a warning, a
+#: table cell — where no wrapper is applied and nothing else would strip it.
+_MARKER_DELIMITERS = str.maketrans({"⟦": "[", "⟧": "]"})
 
 _ANSI_CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _ANSI_OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -51,6 +64,7 @@ def sanitize(text: str, *, replacement: str = "") -> str:
     text = _ANSI_OSC.sub(replacement, text)
     text = _ANSI_CSI.sub(replacement, text)
     text = _ANSI_OTHER.sub(replacement, text)
+    text = text.translate(_MARKER_DELIMITERS)
 
     out: list[str] = []
     for ch in text:

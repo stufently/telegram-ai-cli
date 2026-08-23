@@ -37,7 +37,7 @@ from ._common import (
     telegram_result,
 )
 from ._serialize import message_summary, peer_ref, peer_summary
-from .chats import resolve_chat
+from .chats import guard_message_link, resolve_chat_ref
 
 
 class SearchInput(ReadInput):
@@ -55,12 +55,20 @@ class SearchInput(ReadInput):
 
 
 async def _search_one_chat(
-    ctx: OperationContext, account: Any, params: SearchInput
+    ctx: OperationContext, account: Any, params: SearchInput, warnings: list[str]
 ) -> tuple[dict[str, Any], list[dict[str, Any]], int | None]:
-    entity = await resolve_chat(account.client, params.chat or "", what="search")
+    entity, link = await resolve_chat_ref(account.client, params.chat or "", what="search")
     ref = peer_ref(entity)
     guard_hard_denied(ctx, ref, action="search")
     require_peer(ctx, Capability.READ_CHAT, ref, action="search")
+    guard_message_link(ref, link, what="search")
+
+    if link is not None and link.message_id is not None:
+        # The chat is what a search needs, but dropping the rest of the link in
+        # silence is how a caller ends up believing it searched one message.
+        warnings.append(
+            f"the link names message {link.message_id}; the search covers the whole chat"
+        )
 
     with telegram_errors(what="search"):
         messages = await account.client.get_messages(
@@ -69,7 +77,7 @@ async def _search_one_chat(
             search=params.query,
             max_id=params.before_id or 0,
         )
-    rows = [message_summary(message) for message in messages]
+    rows = [message_summary(message, chat=ref) for message in messages]
     return peer_summary(entity), rows, getattr(messages, "total", None)
 
 
@@ -100,7 +108,9 @@ async def _search_everywhere(
                 withheld += 1
                 continue
 
-            row = message_summary(message)
+            # A global search returns messages from chats the caller never
+            # named, so the permalink is the only cheap way back to any of them.
+            row = message_summary(message, chat=ref)
             row["chat"] = peer_summary(chat)
             rows.append(row)
             if len(rows) >= params.limit:
@@ -120,7 +130,7 @@ async def handle_search(ctx: OperationContext, params: SearchInput) -> Envelope:
 
     async with open_account(ctx, params.account) as account:
         if params.chat:
-            chat, rows, total = await _search_one_chat(ctx, account, params)
+            chat, rows, total = await _search_one_chat(ctx, account, params, warnings)
             data: dict[str, Any] = {"chat": chat, "messages": rows}
         else:
             rows, withheld = await _search_everywhere(ctx, account, params)

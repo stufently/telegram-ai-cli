@@ -59,6 +59,21 @@ has no attribute that would let it be overridden
 A profile named `full` — direct send with no plan step — does not exist either.
 It was considered and rejected; see the [threat model](threat-model.md).
 
+**Neither is the trust boundary in tool output.** Every value a person outside
+this system wrote — message body, media caption, display name, chat title — is
+delimited with `⟦untrusted⟧ … ⟦/untrusted⟧` before a result leaves
+([`untrusted.py`](../telegram_ai_cli/untrusted.py)), and there is no key to turn
+that off. A switch here would be a switch for making injected text
+indistinguishable from this tool's own fields again, which is the failure the
+markers exist to prevent. The same is true of redaction: `redact_output` is read
+through one function so a key *could* be added later, but none exists today.
+
+The markers are published in `meta.untrusted_markers` on every response that
+carries them, so a program parsing the payload strips them from a value it was
+told about rather than from a literal it hard-coded. Details, including why a
+sender cannot forge them, are in
+[Operations → The trust boundary](operations.md#the-trust-boundary-in-tool-output).
+
 ## `profile`
 
 | Value | What it permits |

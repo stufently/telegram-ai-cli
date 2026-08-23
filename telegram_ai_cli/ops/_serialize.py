@@ -15,8 +15,10 @@ with no Telethon installed, and the type it cannot recognise degrades to
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
+from ..links import format_message_link
 from ..safety import PeerKind, PeerRef
 from ._common import iso
 
@@ -26,6 +28,28 @@ MESSAGE_TEXT_LIMIT = 4000
 
 #: Inbox previews are one line of context, not the message.
 PREVIEW_LIMIT = 200
+
+
+@dataclass(frozen=True, slots=True)
+class ReadPointers:
+    """Where a chat's two read pointers stand, as Telegram reports them.
+
+    Read state is a property of the *dialog*, not of a message: Telegram tracks
+    one id per direction and everything at or below it is read. So a caller
+    that wants "has this been seen" needs the pointers alongside the messages,
+    and a message serialized without them must say *unknown* rather than
+    *unread* — the two look identical in a boolean and mean opposite things.
+    """
+
+    inbox_max_id: int | None = None
+    """Highest id this account has read. Answers it for incoming messages."""
+
+    outbox_max_id: int | None = None
+    """Highest id the other side has read. Answers it for outgoing messages."""
+
+    peer_receipts: bool = True
+    """False where Telegram reports no reader pointer at all — a broadcast
+    channel, or a dialog it declined to describe. The fields then stay null."""
 
 
 def peer_kind(entity: Any) -> PeerKind:
@@ -136,18 +160,143 @@ def _clip(text: str | None, limit: int) -> tuple[str | None, bool]:
     return text[:limit], True
 
 
-def message_summary(message: Any, *, text_limit: int = MESSAGE_TEXT_LIMIT) -> dict[str, Any]:
+#: `ReactionCustomEmoji` reads as one word once the prefix is gone.
+_REACTION_KINDS = {"customemoji": "custom_emoji"}
+
+
+def reaction_kind(reaction: Any) -> str:
+    """Which of Telegram's reaction types this is.
+
+    Read off the class name rather than by importing the four classes, for the
+    same reason as everything else here: a type this version of Telethon does
+    not know about degrades to its own name instead of raising.
+    """
+    if reaction is None:
+        return "unknown"
+    name = type(reaction).__name__.removeprefix("Reaction").lower() or "unknown"
+    return _REACTION_KINDS.get(name, name)
+
+
+def reactions_summary(message: Any) -> list[dict[str, Any]] | None:
+    """Who reacted with what, counted — or ``None`` if Telegram said nothing.
+
+    The distinction is load-bearing. ``[]`` means the message carries a
+    reactions block and nobody has reacted; ``None`` means there is no block at
+    all, which is what an old message or a chat with reactions disabled looks
+    like. Collapsing the two into an empty list turns "not applicable" into
+    "nobody cared".
+    """
+    reactions = getattr(message, "reactions", None)
+    if reactions is None:
+        return None
+    results = getattr(reactions, "results", None)
+    if results is None:
+        return None
+
+    rows: list[dict[str, Any]] = []
+    for item in results:
+        reaction = getattr(item, "reaction", None)
+        custom = getattr(reaction, "document_id", None)
+        rows.append(
+            {
+                # Telegram has four reaction types and two of them carry no
+                # emoji at all (`ReactionPaid`, `ReactionEmpty`). Without this,
+                # a paid star reaction and a blank one serialize identically.
+                "kind": reaction_kind(reaction),
+                "emoji": getattr(reaction, "emoticon", None),
+                # A document id is 64-bit, and a JSON consumer parsing it as a
+                # double loses the low bits — which is the whole identifier.
+                "custom_emoji_id": str(custom) if custom is not None else None,
+                "count": int(getattr(item, "count", 0) or 0),
+                # Telegram records the *order* this account picked a reaction
+                # in; presence, not position, is what "did I react" means.
+                "chosen": getattr(item, "chosen_order", None) is not None,
+            }
+        )
+    return rows
+
+
+def topic_id_of(message: Any) -> int | None:
+    """The forum topic a message belongs to, if it is in a forum at all.
+
+    Telegram models a topic as a reply to the message that opens it, so the
+    same field carries two different meanings and only ``forum_topic`` tells
+    them apart. ``reply_to_top_id`` is the topic when the message also replies
+    to something inside it; otherwise the topic *is* the reply target.
+    """
+    reply_to = getattr(message, "reply_to", None)
+    if reply_to is None or not getattr(reply_to, "forum_topic", False):
+        return None
+    return getattr(reply_to, "reply_to_top_id", None) or getattr(reply_to, "reply_to_msg_id", None)
+
+
+def message_link(chat: PeerRef | None, message_id: Any, topic_id: int | None = None) -> str | None:
+    """The permanent address of a message, or ``None`` where none exists.
+
+    A one-to-one conversation is the case worth spelling out: the other party
+    has a username, and ``t.me/<their handle>/55`` is a well-formed URL that
+    opens their profile and addresses no message at all. Producing it would be
+    worse than producing nothing, so a private peer gets no link even though
+    the ingredients for one are right there.
+    """
+    if chat is None or chat.is_private or not isinstance(message_id, int):
+        return None
+    return format_message_link(
+        username=chat.username,
+        chat_id=chat.peer_id,
+        message_id=message_id,
+        topic_id=topic_id,
+    )
+
+
+def _read_flags(message: Any, read: ReadPointers | None) -> tuple[bool | None, bool | None]:
+    """``(read_by_me, read_by_peer)``, with ``None`` meaning "not known".
+
+    Only one of the two can ever be known for a given message: a message this
+    account sent is read by the other side, and one it received is read by this
+    account. The direction that does not apply stays null rather than false.
+    """
+    if read is None:
+        return None, None
+    message_id = getattr(message, "id", None)
+    if not isinstance(message_id, int):
+        return None, None
+
+    if getattr(message, "out", False):
+        if not read.peer_receipts or read.outbox_max_id is None:
+            return None, None
+        return None, message_id <= read.outbox_max_id
+    if read.inbox_max_id is None:
+        return None, None
+    return message_id <= read.inbox_max_id, None
+
+
+def message_summary(
+    message: Any,
+    *,
+    text_limit: int = MESSAGE_TEXT_LIMIT,
+    chat: PeerRef | None = None,
+    read: ReadPointers | None = None,
+) -> dict[str, Any]:
     """One message, flattened.
 
     ``text_truncated`` is per message and separate from the envelope's
     ``truncated``: the page may be complete while one body in it was cut.
+
+    ``chat`` is a :class:`~telegram_ai_cli.safety.PeerRef` rather than the
+    Telethon entity because the only thing a permalink needs is the resolved id
+    and the username, both of which the caller has already computed — and a
+    plain dataclass keeps this function testable without Telethon.
     """
     text, clipped = _clip(getattr(message, "message", None), text_limit)
     sender = getattr(message, "sender", None)
     forward = getattr(message, "forward", None)
+    message_id = getattr(message, "id", None)
+    topic_id = topic_id_of(message)
+    read_by_me, read_by_peer = _read_flags(message, read)
 
     summary: dict[str, Any] = {
-        "id": getattr(message, "id", None),
+        "id": message_id,
         "date": iso(getattr(message, "date", None)),
         "outgoing": bool(getattr(message, "out", False)),
         "sender_id": getattr(message, "sender_id", None),
@@ -156,9 +305,16 @@ def message_summary(message: Any, *, text_limit: int = MESSAGE_TEXT_LIMIT) -> di
         "text": text,
         "text_truncated": clipped,
         "reply_to_msg_id": getattr(getattr(message, "reply_to", None), "reply_to_msg_id", None),
+        "topic_id": topic_id,
         "edited": iso(getattr(message, "edit_date", None)),
         "views": getattr(message, "views", None),
         "pinned": bool(getattr(message, "pinned", False)),
+        "reactions": reactions_summary(message),
+        # A permanent address for the message, so a person can open what the
+        # agent is talking about. Null where Telegram has no such address.
+        "link": message_link(chat, message_id, topic_id),
+        "read_by_me": read_by_me,
+        "read_by_peer": read_by_peer,
         "media": media_summary(message),
     }
     if forward is not None:

@@ -9,6 +9,56 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- `telegram_ai_cli.untrusted` — an explicit instruction boundary in tool output.
+  Values a person outside this system wrote (message body, media caption, display
+  name, chat title, inbox preview, forwarded-from name, profile text, admin rank)
+  are delimited with `⟦untrusted⟧ … ⟦/untrusted⟧` at the point results are
+  assembled, and the delimiters are published in `meta.untrusted_markers`.
+  `meta.untrusted_content` said a *response* contained stranger-written text; it
+  never said which spans, so a message body arrived indistinguishable from this
+  project's own fields. **A sender cannot close the wrapper:** `⟦` and `⟧` are
+  replaced with `[` and `]` inside wrapped content unconditionally, so no
+  spelling of a forged marker in a message body can end the frame — structural,
+  rather than a pattern match that has to enumerate every casing. Ids, dates,
+  counts, links and `username` are never wrapped, so existing parsers keep
+  working, and `untrusted.unwrap()` is the supported way back to a raw value.
+  Strings that are *not* wrapped are still defanged, because a name-based
+  allowlist is a promise the names are complete and they were not — a document's
+  `mime_type` is typed by the uploader and carried a forged marker straight
+  through on the first pass. It is now wrapped like anything else a person
+  types, and `render.sanitize` defangs the delimiters on the terminal-facing
+  paths (plan summaries, warnings, table cells) that get no wrapper of their own.
+  `telegram_plan_*` results are inside the boundary too: their `summary` quotes
+  chat titles and message bodies, and it is built outside `telegram_result`.
+- `telegram_ai_cli.links` — `t.me` links parsed and produced. Public
+  (`t.me/name/123`), private (`t.me/c/<internal>/<id>`) and forum-topic
+  (`…/<topic>/<id>`, `?thread=`) forms, as a pure function with no network and no
+  Telethon. Telegram's own deep links (`t.me/share`, `t.me/login/…`,
+  `t.me/proxy`, …) are declined rather than read as a chat named `share`, and a
+  path longer than Telegram produces is declined rather than truncated.
+- Two link shapes are refused instead of interpreted, after the policy check:
+  a message link into a one-to-one chat (`t.me/someone/123` opens a profile and
+  addresses no message, so the number is not a message id there) and a comment
+  link (`?comment=` addresses the channel's discussion group, a different chat).
+- Message permalinks in output (`link` on every serialized message, and on the
+  reactions payload). `null` where Telegram has no such address — a one-to-one
+  chat or a basic group — rather than a well-formed URL that opens a profile and
+  addresses no message.
+- Reactions: per-emoji counts (`reactions`) on every serialized message,
+  distinguishing `null` (no reaction block at all) from `[]` (nobody reacted),
+  plus a `telegram_message_reactions` read tool / `tg-ai message reactions` for
+  one message — counts, total, permalink and whichever recent reactors Telegram
+  already attached. The full list of *who* reacted is never requested, and where
+  it is unavailable the payload says so. Each row carries a `kind`
+  (`emoji`/`custom_emoji`/`paid`/`empty`): two of Telegram's four reaction types
+  carry no emoji, and without it a paid star reaction serialized as a blank one.
+- Read state on `chat read`: `data.read_state` (the dialog's read pointers, from
+  a call that acknowledges nothing) and `read_by_me` / `read_by_peer` per
+  message. Outside a one-to-one chat Telegram tracks reading per member behind a
+  separate privacy-controlled request this tool does not make — reported as
+  `peer_receipts: false` with a reason, with the per-message field left `null`
+  rather than `false`. Skippable with `include_read_state: false`.
+- `topic_id` on serialized messages, so a forum message says which topic it is in.
 - Project scaffolding: MIT license, `pyproject.toml` targeting Python 3.12+ with
   dependency floors (`telethon>=1.44,<2`, `click>=8.2,<9`, `pydantic>=2.11,<3`,
   `mcp>=2.0,<3`, and the rest), and `constraints.txt` pinning the exact versions
@@ -115,6 +165,22 @@ before that, breaking changes can happen on any `0.x` release.
   (arguments, defaults, effect and the policy each one consults) and the full
   `tgai.yaml` / `TGAI_*` reference, including the part that cannot be configured
   at all.
+
+### Changed
+
+- **A `t.me` link keeps its message number.** `chat` arguments used to resolve a
+  link as a chat and drop everything else, turning "look at this message" into
+  "look at this chat" silently. `chat read` now anchors its page at the message
+  the link names (reported as `meta.anchor_message_id`), `media fetch` and
+  `message reactions` take the message id from the link when it is not given
+  explicitly, and a link plus a conflicting explicit id is refused rather than
+  resolved by preference. A topic link reports `meta.topic_id` and warns that the
+  page is not filtered to it; a search scoped by a message link warns that it
+  covers the whole chat.
+- `telegram_media_fetch`'s `message_id` is now optional — required unless the
+  `chat` argument is a link that names the message.
+- The MCP server's instructions describe the untrusted markers, so a client is
+  told what the delimiters mean instead of inferring it.
 
 ### Fixed
 

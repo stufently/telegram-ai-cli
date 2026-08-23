@@ -54,7 +54,7 @@ from ._common import (
     telegram_result,
 )
 from ._serialize import media_summary, peer_ref, peer_summary
-from .chats import resolve_chat
+from .chats import guard_message_link, message_id_from, resolve_chat_ref
 
 #: Extensions are taken from Telegram-supplied metadata, so they are treated as
 #: hostile input: a short, conservative shape or nothing at all.
@@ -64,8 +64,20 @@ _SAFE_EXTENSION = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
 class MediaFetchInput(ReadInput):
     """Note what is *absent*: there is no destination parameter, by design."""
 
-    chat: str = Field(description="Chat id, @username, or t.me link.")
-    message_id: int = Field(ge=1, description="Id of the message whose attachment to fetch.")
+    chat: str = Field(
+        description=(
+            "Chat id, @username, or t.me link. A link that names the message "
+            "supplies message_id on its own."
+        )
+    )
+    message_id: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Id of the message whose attachment to fetch. Omit only when the chat "
+            "argument is a t.me link to that message."
+        ),
+    )
 
 
 class _CappedWriter:
@@ -162,15 +174,18 @@ async def handle_media_fetch(ctx: OperationContext, params: MediaFetchInput) -> 
     root = ctx.settings.paths.downloads
 
     async with open_account(ctx, params.account) as account:
-        entity = await resolve_chat(account.client, params.chat, what="media.fetch")
+        entity, link = await resolve_chat_ref(account.client, params.chat, what="media.fetch")
         ref = peer_ref(entity)
         guard_hard_denied(ctx, ref, action="media.fetch")
         require_peer(ctx, Capability.READ_MEDIA, ref, action="media.fetch")
+        guard_message_link(ref, link, what="media.fetch")
+
+        message_id = message_id_from(params.message_id, link, what="media.fetch")
 
         with telegram_errors(what="media.fetch"):
-            message = await account.client.get_messages(entity, ids=params.message_id)
+            message = await account.client.get_messages(entity, ids=message_id)
         if message is None or getattr(message, "media", None) is None:
-            raise NotFound(f"message {params.message_id} in that chat has no attachment to fetch")
+            raise NotFound(f"message {message_id} in that chat has no attachment to fetch")
 
         advertised = getattr(getattr(message, "file", None), "size", None)
         if advertised and advertised > download.max_file_bytes:
@@ -195,7 +210,7 @@ async def handle_media_fetch(ctx: OperationContext, params: MediaFetchInput) -> 
             account=account.label,
             actor=ctx.actor,
             peer_id=ref.peer_id,
-            extra={"message_id": params.message_id, "artifact_id": artifact_id},
+            extra={"message_id": message_id, "artifact_id": artifact_id},
         )
 
         try:
@@ -234,7 +249,7 @@ async def handle_media_fetch(ctx: OperationContext, params: MediaFetchInput) -> 
         "bytes": writer.written,
         "sha256": writer.sha256,
         "chat": peer_summary(entity),
-        "message_id": params.message_id,
+        "message_id": message_id,
         "media": media_summary(message),
     }
     if ctx.actor == "cli":

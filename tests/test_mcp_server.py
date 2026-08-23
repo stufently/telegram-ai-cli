@@ -61,6 +61,24 @@ async def test_every_operation_is_exposed_and_none_of_them_apply() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_reaction_reader_is_published_as_a_read_tool() -> None:
+    """A read tool, and emphatically not a way to *add* a reaction."""
+    tools = {tool.name: tool for tool in await _list_tools(build_server())}
+
+    assert "telegram_message_reactions" in tools
+    assert tools["telegram_message_reactions"].annotations.read_only_hint is True
+
+
+def test_the_instructions_teach_the_untrusted_markers() -> None:
+    """A marker a client is never told about is a marker it cannot honour."""
+    from telegram_ai_cli.mcp_server import INSTRUCTIONS
+    from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+
+    assert OPEN_MARKER in INSTRUCTIONS
+    assert CLOSE_MARKER in INSTRUCTIONS
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_tool_comes_back_as_an_envelope_not_a_protocol_error() -> None:
     """Errors travel as content so the caller keeps the code and suggestion."""
     server = build_server()

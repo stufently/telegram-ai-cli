@@ -4,7 +4,7 @@
 > that lets an AI agent — Claude, Codex, or any MCP client — read and act on a
 > personal Telegram account over MTProto (Telethon), the protocol Telegram's own
 > apps use, not the Bot API. Reads (chats, messages, search, whois, members,
-> media) run immediately. Anything that changes something on Telegram (send,
+> media, reactions) run immediately. Anything that changes something on Telegram (send,
 > edit, delete, forward, join, leave, invite, promote, mark read, change profile)
 > goes through an explicit plan, then a separate apply step, never straight from
 > a model's tool call. Chats are gated by an allowlist (private messages closed
@@ -25,6 +25,11 @@
   For MCP clients that also have shell access (Claude Code, Codex), the
   project states plainly that this boundary is not absolute — see the Safety
   section of the README and `docs/threat-model.md`.
+- Prompt-injection boundary: text a stranger wrote (message body, caption,
+  display name, chat title) is delimited in tool output with
+  `⟦untrusted⟧ … ⟦/untrusted⟧`, and the delimiter characters are replaced with
+  ASCII lookalikes inside wrapped content so a sender cannot forge or close the
+  wrapper. Not configurable.
 - Status as of 2026-08: pre-alpha, under active development. Not yet published
   to PyPI or an MCP registry (a deliberate, separate decision — a package name
   in a public registry is claimed permanently).
@@ -39,9 +44,10 @@
   vulnerability reporting (GitHub Security Advisories, not email), scope, and
   the design rationale behind each safety control.
 - [docs/operations.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/operations.md):
-  every operation on both surfaces — the eight read tools, the twelve plan
+  every operation on both surfaces — the nine read tools, the twelve plan
   tools, the plan lifecycle commands and the two terminal-only account
-  commands — with arguments, defaults and the policy each one consults.
+  commands — with arguments, defaults and the policy each one consults, plus
+  the shared message shape and the trust boundary in tool output.
 - [docs/configuration.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/configuration.md):
   the full `tgai.yaml` reference and its `TGAI_`-prefixed environment
   equivalents, including what cannot be configured at all (`777000` and Saved

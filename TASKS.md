@@ -13,6 +13,29 @@ is
 - [ ] `.claude/skills/<skill>/SKILL.md` — at least one Claude Code skill now
       that the tool surface is stable enough to write one against.
 
+## Known gaps
+
+- [ ] **No handler-level tests.** Everything under `ops/` is tested through its
+      pure parts (`_serialize`, `links`, `untrusted`, the policy kernel); no test
+      drives a handler with a fake Telethon client. Raised by review: the cases
+      worth covering that way are policy-checked-before-fetch, a DM refusal, the
+      link/id conflict, and that `chat.read` sends `GetPeerDialogsRequest`
+      specifically rather than anything that acknowledges a message. Needs a
+      small fake-client fixture first.
+
+- [ ] **Plan operations do not accept a `t.me` message link.** Reads resolve one
+      through `chats.resolve_chat_ref` and keep its message number; `write.py`
+      still hands the raw string to `client.get_entity`, so a link is either
+      resolved as a chat by Telethon or refused outright — either way the number
+      is lost. `message.reply` / `message.edit` / `message.delete` are the ones
+      where a pasted link is the natural input, and they should take the message
+      id from it the way `media.fetch` and `message.reactions` now do.
+- [ ] **`chat.read` does not filter by forum topic.** A topic link is parsed and
+      reported (`meta.topic_id`, plus a warning), but the page still covers the
+      whole chat. Telethon can filter with `reply_to=<topic>`; the question is
+      whether that becomes an argument of its own rather than a side effect of
+      the link's shape.
+
 ## Known gaps in the CLI surface
 
 - [ ] **List- and object-valued arguments have no CLI form.** `_options_for` in

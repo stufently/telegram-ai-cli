@@ -54,11 +54,16 @@ handled.
   above, worth naming separately: text engineered to look like an instruction
   to whatever AI agent is reading this tool's output, not to a human. This is
   the primary reason `untrusted_content` exists and the primary reason no read
-  tool executes anything found in message text.
+  tool executes anything found in message text. The flag alone only says a
+  response contains such text; the value itself is delimited with
+  `⟦untrusted⟧ … ⟦/untrusted⟧`, and the delimiter characters cannot survive
+  inside the content they frame, so a sender cannot end the wrapper early and
+  continue as though the tool were speaking. See
+  [the trust boundary](operations.md#the-trust-boundary-in-tool-output).
 - **A compromised or malicious MCP client with no shell.** A client that
   speaks MCP but cannot run arbitrary commands on the host — most IDE
   integrations, Claude Desktop as shipped. Its ceiling is exactly the MCP tool
-  surface: eight read tools and twelve plan tools, no apply tool. See
+  surface: nine read tools and twelve plan tools, no apply tool. See
   [MCP tools in the README](../README.md#mcp-tools).
 - **An AI agent that *does* have shell access** (Claude Code, Codex, and
   comparable coding agents), whether acting on the owner's genuine intent or
