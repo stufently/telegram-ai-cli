@@ -56,7 +56,7 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai drafts` | What was started and never sent, and in which chat |
 | `tg-ai scheduled` | What is queued to be sent to a chat later, and when |
 | `tg-ai account sessions` | Which devices and apps this account is signed in on — and whether one of them isn't yours |
-| `tg-ai message send` / `chat join` / `chat promote` / … | Validate and save an intent — send, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
+| `tg-ai message send` / `message send-file` / `chat join` / `chat promote` / … | Validate and save an intent — send a message or a file, edit, delete, forward, join, leave, create a group, invite, promote, change the profile — as a plan. Nothing goes out yet |
 | `tg-ai chat ban` / `unban` / `kick` / `restrict` / `demote` | Moderation, planned the same way: one member per plan, and the preview says who, where, which rights and for how long |
 | `tg-ai message schedule` | Queue a message for an exact time — or for when the other person is next online — as a plan. Once applied it sits in Telegram's own scheduled queue, visible and cancellable in the app |
 | `tg-ai chat archive` / `chat mute` | Put a chat in Archived, or silence it for a while or indefinitely — settings only this account can see, planned like every other write |
@@ -229,7 +229,7 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
 
 ## MCP tools
 
-Forty-four tools: twenty that run immediately, and twenty-four plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
+Forty-five tools: twenty that run immediately, and twenty-five plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
 telegram_fleet             telegram_plan_send_message     telegram_plan_join_chat
@@ -244,7 +244,7 @@ telegram_message_reactions telegram_plan_kick_user        telegram_plan_react_me
 telegram_chat_topics       telegram_plan_pin_message      telegram_plan_unreact_message
 telegram_watch             telegram_plan_unpin_message    telegram_plan_schedule_message
 telegram_drafts            telegram_plan_archive_chat
-telegram_scheduled         telegram_plan_mute_chat
+telegram_scheduled         telegram_plan_mute_chat        telegram_plan_send_file
 telegram_sessions
 telegram_mentions
 telegram_folders
@@ -263,6 +263,8 @@ The five moderation tools exist so that every rights change has an undo. Grantin
 `tg-ai account add` and `tg-ai account login` are absent from this list on purpose, and the registry refuses to publish them: signing in asks a person for the code Telegram sent to their phone, and enrolling an account widens the very fleet every allowlist is written against.
 
 `telegram_media_fetch` looks like a read tool but isn't one — it writes a file, so it goes through the same server-controlled path handling as everything else that touches disk: the caller never supplies a path, the file lands under a download root with a generated name (`O_CREAT|O_EXCL|O_NOFOLLOW`, a size cap and a running quota), and only an opaque `artifact_id` comes back.
+
+`telegram_plan_send_file` is the same rule pointed the other way, and it is the more dangerous direction: a caller that could name any path on the host would have a read of arbitrary bytes with a delivery mechanism attached — a private key, the `.session` file that *is* the account, somebody's documents — into a chat other people read. So a file is sent from one directory (`paths.uploads`), containment is decided after symlinks are resolved, and the size ceiling is answered from `stat()` rather than from a transfer that fails halfway. The plan's summary names the file, its size, its type and **the form it arrives in**, because "send photo.jpg" hides the difference between a re-encoded picture and the original file. See [`docs/operations.md`](docs/operations.md#sending-a-file-where-the-bytes-may-come-from).
 
 No read tool ever marks a chat read — `mark_read` only exists as an explicit plan operation, because an agent asked to "just look" at a chat should never have a side effect on what the other person sees as unread. That includes the read-state block `telegram_chat_read` returns: it comes from a call that *describes* a dialog's read pointers without acknowledging anything in it.
 

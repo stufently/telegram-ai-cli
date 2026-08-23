@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 DEFAULT_CONFIG_PATH = Path(
@@ -39,6 +39,12 @@ Profile = Literal["readonly", "plan"]
 HARD_DENIED_PEERS: frozenset[int] = frozenset({777000})
 HARD_DENY_SAVED_MESSAGES = True
 
+#: Telegram's own ceiling for one upload from a non-premium account (2 GiB).
+#: Configuring more than this would only move the failure from a refusal here to
+#: a rejection partway through the transfer, so `upload.max_file_bytes` is
+#: bounded by it rather than merely compared against it.
+TELEGRAM_MAX_UPLOAD_BYTES = 2 * 1024**3
+
 
 def _state_home() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
@@ -50,10 +56,10 @@ class PathsConfig(BaseModel):
     sessions: Path = Field(default_factory=lambda: _state_home() / "sessions")
     state: Path = Field(default_factory=_state_home)
     downloads: Path = Field(default_factory=lambda: _state_home() / "downloads")
-    #: The only directory a plan may upload a file from — today a chat photo.
-    #: A separate directory from `downloads` on purpose: that one fills with
-    #: media strangers sent, and "publish this file to a chat" should not be
-    #: able to name one of those by accident.
+    #: The only directory a plan may upload a file from — a chat photo, or the
+    #: file `message send-file` sends. A separate directory from `downloads` on
+    #: purpose: that one fills with media strangers sent, and "publish this file
+    #: to a chat" should not be able to name one of those by accident.
     uploads: Path = Field(default_factory=lambda: _state_home() / "uploads")
     audit_log: Path = Field(default_factory=lambda: _state_home() / "audit.jsonl")
     #: The local message archive, filled only by `archive sync` on a named chat.
@@ -62,6 +68,28 @@ class PathsConfig(BaseModel):
     #: the rate-limit history with it. Created 0600 and not encrypted — the
     #: reasoning is in `telegram_ai_cli/archive.py` and `docs/configuration.md`.
     archive: Path = Field(default_factory=lambda: _state_home() / "archive.sqlite3")
+
+    @field_validator("uploads")
+    @classmethod
+    def _uploads_must_be_absolute(cls, value: Path) -> Path:
+        """Refuse a relative outbox, and an empty one especially.
+
+        `uploads` is not merely a location: it is the allowlist deciding which
+        files may leave this machine. A relative value resolves against the
+        directory this process happened to be started in, and `Path("")` is
+        `Path(".")` — so an outbox left blank in the config would quietly permit
+        whatever sits in the working directory, which for a shell started in
+        `$HOME` includes `.ssh`. The other paths are storage this tool writes
+        to, and get no such rule.
+        """
+        expanded = value.expanduser()
+        if not expanded.is_absolute():
+            raise ValueError(
+                "paths.uploads must be an absolute path: it decides which files may be "
+                "sent, and a relative one would resolve against the working directory "
+                "this process was launched from"
+            )
+        return value
 
 
 class PeerRule(BaseModel):
@@ -134,6 +162,22 @@ class DownloadConfig(BaseModel):
     timeout_seconds: int = Field(default=120, ge=1)
 
 
+class UploadConfig(BaseModel):
+    """A file leaves from a configured directory, never from anywhere on disk."""
+
+    max_file_bytes: int = Field(default=100 * 1024**2, ge=1, le=TELEGRAM_MAX_UPLOAD_BYTES)
+    #: Whether `media fetch`'s download directory may also be sent *from*. Off:
+    #: a downloaded file is one a stranger chose, and re-posting one into another
+    #: chat should be a decision an operator takes once, here, rather than one a
+    #: tool call takes on its own.
+    allow_downloads_dir: bool = False
+    #: Uploading is not one round trip. The applier's per-RPC ceiling is seconds
+    #: because every other write is a single request; a transfer needs minutes,
+    #: and a timeout partway through lands the plan in `unknown_outcome`, which
+    #: costs a person a look at the chat.
+    timeout_seconds: int = Field(default=300, ge=1)
+
+
 class AuditConfig(BaseModel):
     enabled: bool = True
     #: Off by default: the log records that a message was sent, not its text.
@@ -184,6 +228,7 @@ class Settings(BaseSettings):
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     plans: PlansConfig = Field(default_factory=PlansConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
+    upload: UploadConfig = Field(default_factory=UploadConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 

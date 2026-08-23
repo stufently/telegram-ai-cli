@@ -999,7 +999,7 @@ would act on the lie.
 
 ## Plan operations
 
-Twenty-four. Each one **validates and records an intention and returns a `plan_id`**;
+Twenty-five. Each one **validates and records an intention and returns a `plan_id`**;
 nothing reaches Telegram until a person runs `tg-ai plan apply <id>`. Over MCP
 they are `telegram_plan_*` tools. There is no tool that applies a plan — see
 [Safety](../README.md#safety) for what that does and does not promise.
@@ -1011,6 +1011,7 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | --- | --- | --- | --- | --- |
 | `message.send` | `tg-ai message send` | `telegram_plan_send_message` | `send` | `chat`\*, `text`\*, `silent`=false, `link_preview`=true |
 | `message.reply` | `tg-ai message reply` | `telegram_plan_reply_message` | `send` | `chat`\*, `reply_to_message_id`\*, `text`\*, `silent`=false, `link_preview`=true |
+| `message.send_file` | `tg-ai message send-file` | `telegram_plan_send_file` | `send` | `chat`\*, `path`\*, `caption`="", `reply_to_message_id`, `as_document`=false, `silent`=false |
 | `message.edit` | `tg-ai message edit` | `telegram_plan_edit_message` | `send` | `chat`\*, `message_id`\*, `text`\* |
 | `message.delete` | `tg-ai message delete` | `telegram_plan_delete_message` | `send` | `chat`\*, `message_ids`\* (list), `revoke`=true |
 | `message.forward` | `tg-ai message forward` | `telegram_plan_forward_message` | `send` | `source_chat`\*, `message_ids`\*, `destination_chat`\*, `silent`=false, `drop_author`=false |
@@ -1132,6 +1133,109 @@ Notes that are not obvious from the table:
   `plan` profile: it is account-scoped, so no chat allowlist can express it.
 - **`chat.mark_read` exists so that reading never has to.** It is the only way
   this tool touches the read pointer.
+- **`message.send_file` takes one file, from one directory.** The path rule and
+  the size ceiling are below; the short version is that a caller names a file
+  *inside the outbox*, never a path on the host.
+
+### Sending a file: where the bytes may come from
+
+`telegram_media_fetch` refuses to let a caller choose where a downloaded file
+**lands**. Sending is the same problem pointed the other way, and it is the more
+dangerous half: a caller that could name any path would have a read of arbitrary
+bytes with a delivery mechanism attached — `~/.ssh/id_ed25519`, the `.session`
+file that *is* the account, `state.db` with its queue of unsent messages,
+somebody's tax return — and the destination is a chat other people read. Nothing
+about "it is only a chat tool" contains that, so the rule is symmetric with the
+download rule:
+
+- **A file is sent from `paths.uploads` and nowhere else.** A relative name is
+  read from that directory; an absolute path is accepted only if it is inside
+  it. Everything else is refused with `FORBIDDEN_BY_ALLOWLIST`, and the refusal
+  names the directories that are permitted.
+- **Containment is decided after symlinks are resolved.** A link sitting in the
+  outbox and pointing at `/etc/shadow` has an innocent name and hostile bytes; a
+  prefix check on the string would pass it. The path is realpathed first.
+- **A relative name is never read from the process's working directory.** That
+  is whatever happened to launch the server, so treating it as an input would
+  make the same argument mean different files in different sessions.
+- **The download directory is not an outbox by default.** `media fetch` writes
+  files a *stranger* chose; re-posting one into another chat is a decision an
+  operator takes once, by setting `upload.allow_downloads_dir`, rather than one
+  a tool call takes on its own.
+- **Size is answered from `stat()`, before a byte is uploaded.**
+  `upload.max_file_bytes` (100 MiB by default) is checked at planning time and
+  again at apply time, and it is itself capped at Telegram's own 2 GiB ceiling —
+  configuring more would only move the failure from a refusal to a rejection
+  partway through the transfer. An oversize file fails with
+  `ARTIFACT_TOO_LARGE`, naming both the file's size and the ceiling.
+- **Empty files, directories, pipes and devices are refused** as input mistakes
+  rather than discovered as an RPC error. The file is opened once, with
+  `O_NOFOLLOW` and `O_NONBLOCK`, and its type and size come from `fstat` on that
+  descriptor — a name checked with `stat()` and opened afterwards can be a FIFO
+  by the time it is opened, which blocks for ever before any timeout is armed.
+- **The outbox must not be writable by other users.** The whole rule assumes the
+  files in it were put there by whoever configured this tool; a `0777` directory
+  makes it "whatever anybody on the machine dropped in". A group- or
+  world-writable outbox is refused with `INSECURE_PERMISSIONS` and the `chmod`
+  that fixes it — not re-permissioned automatically, since it is a directory a
+  person owns. `paths.uploads` must also be an *absolute* path: `Path("")` is
+  `Path(".")`, so a blank one would silently make the process's working
+  directory the allowlist.
+
+What this does **not** claim: someone who can already write inside the outbox can
+swap the file between the check and the upload. That is not the hole the rule
+closes — it stops a *caller* naming a path outside the directory — and the plan
+records the file's SHA-256, which the applier recomputes before sending. A file
+edited or replaced after review fails with `PLAN_PRECONDITION_FAILED` instead of
+being uploaded; the same bytes reached through a different name are a warning,
+not a refusal. A hard link into the outbox is the same story: making one takes
+write access to that directory, and anybody with it could copy the file in
+instead.
+
+#### What the preview has to show
+
+The plan summary is the approval surface, so for an upload it carries the file's
+name, its size in both human and exact form, its MIME type, its SHA-256, the
+directory it came from, and **the form it will arrive in**:
+
+```
+Send a file as work to "Release team" @releases id=-1001234567890 kind=group
+--- file ---
+  name:     build-2026-08-23.tar.gz
+  size:     8.4 MiB (8830464 bytes)
+  type:     application/gzip
+  sha256:   9f2c…c41b
+  from:     /home/you/.local/state/telegram-ai-cli/uploads
+  sent:     as a document — Telegram has no compressed form for this type, so the bytes arrive unchanged
+--- caption (34 chars) ---
+The build everyone has been waiting for
+```
+
+"Send photo.jpg" would hide the one distinction that matters here: a photo sent
+as a photo is re-encoded by Telegram and the original file is not what arrives,
+while the same file sent as a document arrives byte for byte. The delivery form
+is derived from the extension, and it follows what Telethon actually does rather
+than what "an image" means in ordinary speech: **PNG and JPEG** become photos
+(`telethon.utils.is_image` recognises no other picture format, so `.webp`,
+`.bmp` and `.heic` are uploaded as documents with their bytes intact),
+`.mp4`/`.mov`/`.mkv` and friends arrive playable in the chat, `.ogg`/`.opus` as
+a voice message, `.mp3`/`.flac` as an audio track, everything else as a plain
+document. Only the photo form loses the original file; the rest differ in how
+they are *presented*, and the preview says so in those words.
+
+`as_document=true` overrides all of it, and it is the only guarantee this tool
+can actually make about the bytes, because `force_document` is the one
+instruction Telethon always obeys.
+
+**One file per plan.** A list of paths would let a single approval upload a
+directory, which is the blast radius the review step exists to bound.
+
+**Uploading gets its own timeout.** Every other write is a single request and
+finishes inside the applier's 60-second ceiling; a transfer needs
+`upload.timeout_seconds` (300 by default). Getting that wrong is expensive: a
+timeout partway through an upload is not a failure, it is `unknown_outcome` —
+the file may well have arrived — and resolving one costs a person a look at the
+chat.
 
 - **`message_id` is optional on the four message marks because `chat` may be a
   link.** `tg-ai message react --chat https://t.me/example/4231 --emoji 👍` takes

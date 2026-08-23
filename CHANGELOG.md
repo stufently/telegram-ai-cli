@@ -200,6 +200,61 @@ before that, breaking changes can happen on any `0.x` release.
   than none: a client that auto-approves what it was told is harmless acts on
   the lie.
 
+- `telegram_plan_send_file` / `tg-ai message send-file` — the first plan
+  operation that sends *bytes*: one local file to one chat, with an optional
+  caption and an optional reply, as compressed media or as an untouched
+  document. Like every remote write it is planned over MCP and applied from a
+  terminal; unlike the others, what it puts at risk is the host rather than the
+  chat.
+  **A caller names a file, never a path.** `media fetch` refuses to let a caller
+  choose where a download lands; sending is that problem reversed and worse — a
+  free choice of path would be a read of arbitrary bytes with a delivery
+  mechanism attached (`~/.ssh/id_ed25519`, the `.session` file that *is* the
+  account, `state.db` with its queue of unsent messages) into a chat other
+  people read. So a file is sent from `paths.uploads` and nowhere else: a
+  relative name is read from that directory rather than from whatever working
+  directory launched the server, an absolute path is accepted only if it is
+  inside it, and containment is decided *after* symlinks are resolved — a link
+  in the outbox pointing at `/etc/shadow` has an innocent name and hostile
+  bytes, and a prefix check on the string would pass it. The download directory
+  is not an outbox by default (`upload.allow_downloads_dir`): a fetched file is
+  one a stranger chose, and re-posting it into another chat should be an
+  operator's decision rather than a tool call's.
+  **The preview says what actually arrives.** The summary a person approves
+  carries the name, the size in both human and exact form, the MIME type, the
+  SHA-256, the directory it came from, and the delivery form — because "send
+  photo.jpg" hides the one distinction that cannot be undone: a photo sent as a
+  photo is re-encoded and the original file is not what lands, while the same
+  file sent with `as_document` arrives byte for byte. The forms follow what
+  Telethon actually does rather than what "an image" usually means — PNG and
+  JPEG become photos and every other picture format goes as a document, because
+  `utils.is_image` recognises no others — so the line a person approves
+  describes the send that happens. `as_document` overrides all of it and is the
+  only guarantee available about the bytes, since `force_document` is the one
+  instruction Telethon always obeys.
+  **The outbox is trusted, so it has to be trustworthy.** `paths.uploads` must
+  be an absolute path — `Path("")` is `Path(".")`, and a blank one would quietly
+  make the process's working directory the allowlist — and a group- or
+  world-writable outbox is refused rather than silently accepted, since the rule
+  rests on the files in it having been put there by the operator. The file is
+  opened once with `O_NOFOLLOW | O_NONBLOCK` and its type, size and digest all
+  come from that descriptor: a name checked with `stat()` and opened afterwards
+  can be a FIFO by the time it is opened, which blocks for ever before any
+  timeout exists.
+  **The size ceiling comes from `stat()`, not from a failed upload.**
+  `upload.max_file_bytes` (100 MiB, itself capped at Telegram's 2 GiB) is
+  checked when the plan is written and again before the transfer starts, so an
+  oversize file is a refusal naming both numbers rather than a transfer that
+  dies partway. Empty files, directories and devices are refused as input
+  mistakes. The plan records the file's digest and the applier recomputes it: a
+  file edited or swapped between review and apply fails the precondition
+  instead of being uploaded, and the same bytes under another name are a
+  warning rather than a refusal.
+  **Uploading gets its own timeout** (`upload.timeout_seconds`, 300s) in place
+  of the applier's 60-second per-RPC ceiling, which is generous for a request
+  carrying a sentence and useless for one carrying a hundred megabytes. Getting
+  that wrong is not a retry: a timeout partway through an upload is
+  `unknown_outcome`, which costs a person a look at the chat.
 - `telegram_folders` / `tg-ai folders` — the account's chat folders, which are
   the one grouping in this system a *person* authored: id, name, emoji, the
   chats each folder names or excludes, and the category flags it carries

@@ -52,6 +52,7 @@ from .errors import (
 )
 from .limits import LimitKind, Reservation
 from .opspec import REGISTRY
+from .outbox import Delivery, OutboundFile, human_bytes, resolve_outbound
 from .plans import Plan, PlanState
 from .render import sanitize_line
 from .safety import Capability
@@ -66,12 +67,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 #: has been told not to retry, so nothing further will arrive on its own.
 RPC_TIMEOUT_SECONDS = 60
 
+#: Operations whose "one RPC" is really a transfer, and therefore need their own
+#: ceiling. Sixty seconds is generous for a request that carries a sentence and
+#: far too little for one that carries a hundred megabytes — and the cost of
+#: getting it wrong is not a retry but an ``unknown_outcome`` a person has to
+#: resolve by hand, because a timeout mid-upload proves nothing about whether
+#: the message appeared.
+_UPLOAD_OPERATIONS = frozenset({"message.send_file"})
+
 #: Which budget each operation draws from, and therefore which ceiling refuses
 #: it. Keyed by ``Operation.name`` so a new write cannot be added without
 #: deciding what it costs.
 _LIMIT_KINDS: dict[str, LimitKind] = {
     "message.send": LimitKind.SEND,
     "message.reply": LimitKind.SEND,
+    "message.send_file": LimitKind.SEND,
     "message.edit": LimitKind.SEND,
     "message.delete": LimitKind.SEND,
     "message.forward": LimitKind.SEND,
@@ -115,6 +125,10 @@ class _Prepared:
     limit_target: str
     peers: dict[str, Resolved] = field(default_factory=dict)
     messages: list[Any] = field(default_factory=list)
+    #: The file an upload plan sends, re-resolved and re-digested here rather
+    #: than trusted from the plan: the path is a name, and the bytes behind a
+    #: name can change between review and apply.
+    attachment: OutboundFile | None = None
     audit_peer_id: int | None = None
     audit_body: str | None = None
     warnings: list[str] = field(default_factory=list)
@@ -255,6 +269,42 @@ def _check_peer(expected: dict[str, Any], actual: Resolved, *, what: str) -> lis
     return warnings
 
 
+def _check_file(expected: dict[str, Any], actual: OutboundFile) -> list[str]:
+    """Refuse if the bytes behind the path are not the ones that were reviewed.
+
+    A plan records a *name*, and a name is not content. Between review and
+    apply the file can be replaced, truncated or rewritten — by an editor, a
+    sync client, or anybody who can write into the outbox — and the whole value
+    of the approval is that what was read is what leaves. So the digest decides,
+    and it is recomputed here rather than taken from the plan.
+
+    The path is compared too, but only as a warning: the same bytes reached
+    through a different name are the file that was approved.
+    """
+    warnings: list[str] = []
+    if expected.get("sha256") != actual.sha256 or expected.get("size_bytes") != actual.size_bytes:
+        raise PlanPreconditionFailed(
+            f"the file at that path is not the one the plan was reviewed against: it is now "
+            f"{actual.size_bytes} bytes ({human_bytes(actual.size_bytes)}) with digest "
+            f"{actual.sha256}",
+            suggestion="Reject this plan and create a new one for the file as it now stands.",
+        )
+    if expected.get("delivery") != str(actual.delivery):
+        # Only reachable if the configuration changed the classification under a
+        # pending plan. The reviewed line said "as a compressed photo" or "as a
+        # document", and sending the other one is not what was approved.
+        raise PlanPreconditionFailed(
+            f"this file would now be sent {actual.delivery}, not "
+            f"{expected.get('delivery')} as the plan recorded"
+        )
+    if expected.get("path") != str(actual.path):
+        warnings.append(
+            "the path resolves somewhere else than it did at planning time; the contents "
+            "are identical, so the send is the one that was approved"
+        )
+    return warnings
+
+
 def _check_messages(expected: list[dict[str, Any]], actual: list[Any]) -> None:
     """Refuse if the messages are not the ones that were reviewed."""
     from .ops.write import message_snapshot
@@ -320,6 +370,34 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 )
                 _check_messages([pre["reply_to"]], original)
             return prepared
+
+        case "message.send_file":
+            require_planning_profile(ctx, Capability.SEND, action=action)
+            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+            require_peer(ctx, Capability.SEND, chat.ref, action=action)
+            warnings += _check_peer(pre["peer"], chat, what="chat")
+            # Resolved again, not read from the plan: the outbox rule has to
+            # hold at the moment of sending, and the configuration may have been
+            # narrowed since — a path that was permitted when the plan was
+            # written must not be sent from a directory that is no longer one.
+            attachment = resolve_outbound(
+                ctx.settings,
+                params.path,  # type: ignore[attr-defined]
+                as_document=params.as_document,  # type: ignore[attr-defined]
+            )
+            warnings += _check_file(pre["file"], attachment)
+            reply_to = params.reply_to_message_id  # type: ignore[attr-defined]
+            if reply_to is not None:
+                original = await _fetch_messages(client, chat, [reply_to])
+                _check_messages([pre["reply_to"]], original)
+            return _Prepared(
+                limit_target=str(chat.ref.peer_id),
+                peers={"chat": chat},
+                attachment=attachment,
+                audit_peer_id=chat.ref.peer_id,
+                audit_body=getattr(params, "caption", None) or None,
+                warnings=warnings,
+            )
 
         case "message.edit" | "message.delete":
             require_planning_profile(ctx, Capability.SEND, action=action)
@@ -497,6 +575,29 @@ async def _execute(
                 link_preview=params.link_preview,  # type: ignore[attr-defined]
             )
             return {"message_id": int(message.id)}, warnings
+
+        case "message.send_file":
+            attachment = prepared.attachment
+            if attachment is None:  # pragma: no cover - _verify always sets it
+                raise InvalidInput("the file to send was never resolved; refusing to upload")
+            message = await client.send_file(
+                prepared.peers["chat"].ref.peer_id,
+                str(attachment.path),
+                caption=params.caption or None,  # type: ignore[attr-defined]
+                # The one instruction Telethon always obeys, and the only reason
+                # the summary can promise the bytes arrive untouched.
+                force_document=attachment.as_document,
+                voice_note=attachment.delivery is Delivery.VOICE,
+                reply_to=params.reply_to_message_id,  # type: ignore[attr-defined]
+                silent=params.silent,  # type: ignore[attr-defined]
+            )
+            return {
+                "message_id": int(message.id),
+                "file": attachment.name,
+                "bytes": attachment.size_bytes,
+                "sha256": attachment.sha256,
+                "delivery": str(attachment.delivery),
+            }, warnings
 
         case "message.edit":
             message = await client.edit_message(
@@ -952,7 +1053,8 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
             # 5. The effect.
             started_rpc = True
             outcome, rpc_warnings = await asyncio.wait_for(
-                _execute(client, plan, params, prepared), timeout=RPC_TIMEOUT_SECONDS
+                _execute(client, plan, params, prepared),
+                timeout=_rpc_timeout(ctx, plan.operation),
             )
             started_rpc = False
 
@@ -1055,6 +1157,19 @@ async def apply_plan(ctx: OperationContext, plan_id: str) -> Envelope:
             if reservation is not None:
                 ctx.limits.release(reservation)
         raise
+
+
+def _rpc_timeout(ctx: OperationContext, operation: str) -> int:
+    """How long this one operation may take before its outcome is unknown.
+
+    Sending a file is the only write here that is a transfer rather than a
+    request, so it is the only one whose ceiling is a configuration value. The
+    default applies to everything else, unchanged: raising it globally would
+    make a stuck ordinary send sit for minutes before anybody heard about it.
+    """
+    if operation in _UPLOAD_OPERATIONS:
+        return ctx.settings.upload.timeout_seconds
+    return RPC_TIMEOUT_SECONDS
 
 
 def _settle_unknown(

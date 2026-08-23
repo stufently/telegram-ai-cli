@@ -177,6 +177,31 @@ is
       the envelope is built, so it stops depending on every call site
       remembering.
 
+- [ ] **Sending a file covers one file, and only the forms an extension
+      names.** `message.send_file` takes a single path on purpose — a list
+      would let one approval upload a directory — so there is no album, and
+      Telegram's grouped-media send is not reachable at all. The delivery form
+      is read from the extension (`as_document` overrides it), which leaves
+      three things unexpressible: a video note (the round one), a voice message
+      made from a file Telegram would otherwise treat as music, and a thumbnail
+      for a document. Each is one more boolean on an input model that is
+      already at six fields, and none of them has been asked for yet; the
+      question is whether they become flags or a single `send_as` enum.
+- [ ] **The outbox has no quota and nothing prunes it.** `paths.downloads` is
+      bounded by `download.total_quota_bytes` because this tool fills it;
+      `paths.uploads` is filled by a person, so a per-file ceiling is all
+      `upload.max_file_bytes` gives. If the directory becomes a place agents
+      leave generated files, it needs the same running total — and a decision
+      about who deletes from it.
+- [ ] **A file plan pins bytes, not a path.** The applier recomputes the
+      SHA-256 and refuses a file that changed, which closes the swap between
+      review and apply. It does not close the window between that check and the
+      upload itself: someone who can already write inside the outbox can
+      substitute the file in between. Closing it properly means holding an open
+      descriptor from the check through the send — Telethon's `send_file` takes
+      a file object, but then the name has to be supplied as a
+      `DocumentAttributeFilename` and the type detection it does from the path
+      is lost, which is a bigger change than the residual risk warrants today.
 - [ ] **Topic listings serve one page.** `chat.topics` sends
       `messages.getForumTopics` with a zeroed cursor, so a forum with more
       topics than `limit` reports `truncated` and has no way to fetch the rest.

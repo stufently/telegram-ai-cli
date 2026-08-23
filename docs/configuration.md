@@ -120,6 +120,7 @@ replaying from their own machine, which is a good way to have it killed.
 | `paths.sessions` | `$XDG_STATE_HOME/telegram-ai-cli/sessions` (else `~/.local/state/…`) | `.session` files, device fingerprints, session locks |
 | `paths.state` | `$XDG_STATE_HOME/telegram-ai-cli` | `state.db` (accounts, plans, rate limits) and `secret.key` |
 | `paths.downloads` | `…/telegram-ai-cli/downloads` | Everything `media fetch` writes |
+| `paths.uploads` | `…/telegram-ai-cli/uploads` | The only directory `message send-file` may send *from* |
 | `paths.audit_log` | `…/telegram-ai-cli/audit.jsonl` | The append-only audit log |
 | `paths.archive` | `…/telegram-ai-cli/archive.sqlite3` | The local message archive — only what `archive sync` was told to copy |
 
@@ -284,6 +285,40 @@ to the database in plaintext.
 
 There is no setting for *where* a caller may write, because there is no such
 parameter — see [`media fetch`](operations.md#telegram_media_fetch--tg-ai-media-fetch).
+
+## `upload`
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `upload.max_file_bytes` | `104857600` (100 MiB) | Largest file `message send-file` will send. Capped at `2147483648` (2 GiB), Telegram's own ceiling |
+| `upload.allow_downloads_dir` | `false` | Whether `paths.downloads` may also be sent *from* |
+| `upload.timeout_seconds` | `300` (min 1) | Ceiling on the transfer itself, replacing the applier's 60-second per-RPC one |
+
+There is no setting for *which paths* a caller may send, because the answer is
+fixed: files come from `paths.uploads`, symlinks are resolved before the
+directory is checked, and a relative name is read from the outbox rather than
+from the process's working directory. `allow_downloads_dir` is the one widening
+available, and it is off because a downloaded file is one a stranger chose —
+re-posting it into another chat should be an operator's decision taken here, not
+a tool call's. The reasoning in full is in
+[Sending a file](operations.md#sending-a-file-where-the-bytes-may-come-from).
+
+A file over `upload.max_file_bytes` is refused from the descriptor it is hashed
+on — at planning time and again at apply time — rather than discovered partway
+through a transfer. Configuring more than Telegram accepts is refused as a
+validation error, because it could only move the failure later.
+
+Two requirements on the directory itself, both fail-closed:
+
+- **`paths.uploads` must be absolute.** It is not merely a location, it is the
+  allowlist deciding which files may leave; a relative value resolves against
+  whatever directory this process was started in, and `Path("")` is `Path(".")`.
+  A relative one is rejected when the settings are built.
+- **It must not be writable by group or others.** Nothing here creates the
+  outbox for you, and a `0777` one would mean "whatever anybody on this machine
+  dropped in" rather than "what the operator put there". Sending from one is
+  refused with `INSECURE_PERMISSIONS` and the `chmod` that fixes it; it is not
+  re-permissioned automatically, because it is a directory a person owns.
 
 ## `audit`
 

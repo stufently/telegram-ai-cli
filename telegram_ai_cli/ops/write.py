@@ -11,8 +11,8 @@ specific hole rather than to be tidy.
 **One plan tool per operation.** The obvious design is a single
 ``plan_create(operation, params)``. It fails in practice: an untyped ``params``
 bag publishes no schema for the fields, so a model calling it invents argument
-names that look plausible and are wrong. Twelve typed tools cost twelve schema
-entries and buy correct calls.
+names that look plausible and are wrong. One typed tool per operation costs a
+schema entry each and buys correct calls.
 
 **Targets are resolved to numbers now, and the numbers are recorded.** A
 username is a lease, not an identity: it can be released and taken by somebody
@@ -45,6 +45,7 @@ from ..errors import (
     ProfileForbidden,
 )
 from ..opspec import REGISTRY, Effect, Operation
+from ..outbox import file_preview, resolve_outbound
 from ..plans import Plan
 from ..render import quote_for_review, sanitize_line
 from ..safety import REMOTE_WRITE_CAPABILITIES, Capability, PeerKind, PeerRef
@@ -62,6 +63,11 @@ MAX_MESSAGE_CHARS = 4096
 #: A single plan may not fan out into an unbounded number of deletions or
 #: forwards. Reviewing "delete these 4000 messages" is not review.
 MAX_MESSAGE_IDS = 100
+
+#: Telegram's ceiling for the caption under a file, a quarter of what a plain
+#: message may hold. Refusing here turns a server-side rejection — arriving
+#: after the whole file has been uploaded — into a validation message.
+MAX_CAPTION_CHARS = 1024
 
 #: ``t.me/+HASH`` and the legacy ``t.me/joinchat/HASH``. Matched here rather
 #: than passed to Telethon verbatim so the hash can be recorded as the policy
@@ -372,6 +378,45 @@ class ReplyMessageInput(WriteInput):
     text: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
     silent: bool = False
     link_preview: bool = True
+
+
+class SendFileInput(WriteInput):
+    """One file, one chat.
+
+    A list of paths would let one approval upload a directory, and the review
+    step exists to bound exactly that. The path is not a free choice either:
+    :mod:`telegram_ai_cli.outbox` resolves it inside the configured outbox and
+    refuses anything outside, so this operation cannot be turned into "post
+    ``~/.ssh/id_ed25519`` into a group chat".
+    """
+
+    chat: int | str = Field(description="Chat id, @username, or user id.")
+    path: str = Field(
+        min_length=1,
+        description=(
+            "The file to send: a name relative to paths.uploads, or an absolute path "
+            "inside it. Anything resolving outside the permitted directories is refused, "
+            "symlinks included. One file per plan."
+        ),
+    )
+    caption: str = Field(
+        default="",
+        max_length=MAX_CAPTION_CHARS,
+        description="Text shown with the file. Telegram allows 1024 characters here.",
+    )
+    reply_to_message_id: int | None = Field(
+        default=None,
+        gt=0,
+        description="Send it as a reply to this message.",
+    )
+    as_document: bool = Field(
+        default=False,
+        description=(
+            "Send the bytes unchanged, as a document, whatever the file's type — rather "
+            "than letting Telegram re-encode an image or video into its compressed form."
+        ),
+    )
+    silent: bool = Field(default=False, description="Deliver without a notification sound.")
 
 
 class EditMessageInput(WriteInput):
@@ -686,6 +731,67 @@ async def plan_reply_message(ctx: OperationContext, params: BaseModel) -> Plan:
             "body_len": len(p.text),
         },
         summary=summary,
+    )
+
+
+async def plan_send_file(ctx: OperationContext, params: BaseModel) -> Plan:
+    """Plan an upload, and describe it well enough to be approved.
+
+    The file is resolved *before* the account is opened. Refusing a path costs
+    nothing then — no connection, no lookup of the destination chat — and
+    reading the file's own metadata is not an act anyone else can observe.
+
+    What goes into the summary is the whole point of the operation: which file,
+    how big, of what type, and **which form it arrives in**. "Send photo.jpg"
+    hides the difference between a re-encoded picture and the original file,
+    and only one of those two can be undone by sending it again.
+    """
+    p = cast(SendFileInput, params)
+    require_planning_profile(ctx, Capability.SEND, action="message.send_file")
+    file = resolve_outbound(ctx.settings, p.path, as_document=p.as_document)
+
+    async with open_writer(ctx, p.account) as (label, client):
+        target = await resolve_peer(client, p.chat)
+        require_peer(ctx, Capability.SEND, target.ref, action="message.send_file")
+        original = (
+            await _fetch_message(client, target, p.reply_to_message_id)
+            if p.reply_to_message_id is not None
+            else None
+        )
+
+    caption = (
+        f"--- caption ({len(p.caption)} chars) ---\n{quote_for_review(p.caption)}"
+        if p.caption
+        else "--- caption ---\n  (none)"
+    )
+    parts = [
+        f"Send a file as {label} to {describe(target)}",
+        file_preview(file),
+        caption,
+    ]
+    if original is not None:
+        quoted = quote_for_review(getattr(original, "message", None) or "", limit=500)
+        parts.append(f"--- in reply to message {p.reply_to_message_id} ---\n{quoted}")
+    if p.silent:
+        parts.append("Delivered silently: no notification sound.")
+
+    return await _create(
+        ctx,
+        operation="message.send_file",
+        account=label,
+        params=p,
+        preconditions={
+            "peer": peer_snapshot(target),
+            # The digest is what makes "the file reviewed is the file sent"
+            # checkable later: the path stays the same while the bytes behind it
+            # need not, and swapping them is the cheap attack on a queue of
+            # approved uploads.
+            "file": file.snapshot(),
+            "caption_sha256": text_digest(p.caption) if p.caption else None,
+            "caption_len": len(p.caption),
+            "reply_to": message_snapshot(original) if original is not None else None,
+        },
+        summary="\n".join(parts),
     )
 
 
@@ -1208,8 +1314,12 @@ async def _fetch_messages(client: Any, target: Resolved, ids: list[int]) -> list
     found = [m for m in fetched if m is not None]
     if len(found) != len(ids):
         missing = sorted(set(ids) - {int(m.id) for m in found})
+        # The chat is named by id, not by `describe`. A title is written by
+        # strangers, and `Envelope.failure` is outside the trust boundary: it
+        # neither wraps nor defangs, so a title quoted here reaches the reader
+        # as an unmarked sentence in the one field it has most reason to trust.
         raise InvalidInput(
-            f"message(s) {missing} not found in {describe(target)}",
+            f"message(s) {missing} not found in chat {target.ref.peer_id}",
             suggestion="Check the ids; deleted messages cannot be edited or forwarded.",
         )
     return found
@@ -1293,6 +1403,24 @@ REPLY_MESSAGE = _register(
     input_model=ReplyMessageInput,
     capability=Capability.SEND,
     planner=plan_reply_message,
+)
+
+SEND_FILE = _register(
+    name="message.send_file",
+    cli=("message", "send-file"),
+    plan_tool="telegram_plan_send_file",
+    summary="Plan sending one local file to a chat.",
+    description=(
+        "Records the intent to upload a file. Nothing is sent until a person applies the "
+        "plan. The file must already be inside the configured outbox directory "
+        "(paths.uploads): a caller-chosen path anywhere on the host would make this a way "
+        "to post private keys, session files or anyone's documents into a chat. The plan's "
+        "summary names the file, its size, its type and the form it arrives in — compressed "
+        "media or an untouched document."
+    ),
+    input_model=SendFileInput,
+    capability=Capability.SEND,
+    planner=plan_send_file,
 )
 
 EDIT_MESSAGE = _register(
@@ -1465,6 +1593,7 @@ SET_PROFILE = _register(
 WRITE_OPERATIONS: tuple[Operation, ...] = (
     SEND_MESSAGE,
     REPLY_MESSAGE,
+    SEND_FILE,
     EDIT_MESSAGE,
     DELETE_MESSAGE,
     FORWARD_MESSAGE,
