@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+#
+# The OPTIONAL local transcription image. Nothing else in this project depends
+# on it, `make build` does not build it, and an installation that never runs
+# `make transcribe-image` carries none of it — no model weights, no inference
+# runtime, and no extra dependency in the published package. That separation is
+# the whole reason this is a second Dockerfile rather than a stage in the first.
+#
+# Engine: faster-whisper (CTranslate2) rather than openai-whisper (PyTorch).
+# openai-whisper pulls a CPU build of torch, which is roughly 2 GB of image on
+# its own; CTranslate2 is a purpose-built inference runtime, runs the same
+# weights several times faster on CPU with int8 quantisation, and uses about a
+# quarter of the memory. For a container spun up per voice message, start-up
+# cost and image size are the properties that matter, and it wins both.
+#
+# Audio decoding is PyAV (a dependency of faster-whisper), so there is no
+# ffmpeg binary to install: Telegram's .oga/opus voice notes decode in-process.
+#
+# Versions are pinned, and were verified against the PyPI JSON API and the
+# python:3.14 wheel tags on 2026-08-23 rather than written from memory:
+#   python 3.14   — newest maintained CPython branch, same as the main image
+#   faster-whisper 1.2.1  — latest release
+#   ctranslate2    4.8.1  — latest, and the first with cp314 wheels
+FROM python:3.14-slim AS runtime
+
+# UID/GID default to the host `deploy` user, matching the main image and the
+# Makefile. The container writes to a bind-mounted model cache; as root it would
+# leave files there the host user cannot delete.
+ARG UID=1002
+ARG GID=1002
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/models
+
+RUN pip install --no-cache-dir \
+        "faster-whisper==1.2.1" \
+        "ctranslate2==4.8.1"
+
+RUN groupadd --gid "${GID}" tgai \
+    && useradd --uid "${UID}" --gid "${GID}" --create-home --shell /usr/sbin/nologin tgai \
+    && mkdir -p /models /audio \
+    && chown -R "${UID}:${GID}" /models /audio
+
+COPY docker/transcribe/entrypoint.py /opt/transcriber/entrypoint.py
+
+USER tgai
+WORKDIR /opt/transcriber
+
+# No CMD default on purpose: both subcommands ("transcribe", "download-model")
+# are deliberate, and a default would make one of them the accidental one.
+ENTRYPOINT ["python", "/opt/transcriber/entrypoint.py"]

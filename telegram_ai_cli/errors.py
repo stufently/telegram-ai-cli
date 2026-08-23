@@ -50,6 +50,10 @@ class ErrorCode(StrEnum):
     QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
     ARTIFACT_TOO_LARGE = "ARTIFACT_TOO_LARGE"
 
+    # --- optional local components ----------------------------------------
+    TRANSCRIBER_UNAVAILABLE = "TRANSCRIBER_UNAVAILABLE"
+    TRANSCRIPTION_FAILED = "TRANSCRIPTION_FAILED"
+
     # --- upstream ---------------------------------------------------------
     FLOOD_WAIT = "FLOOD_WAIT"
     FORWARDS_RESTRICTED = "FORWARDS_RESTRICTED"
@@ -248,6 +252,38 @@ class QuotaExceeded(TelegramAIError):
 
 class ArtifactTooLarge(TelegramAIError):
     code = ErrorCode.ARTIFACT_TOO_LARGE
+
+
+# --- optional local components ---------------------------------------------
+
+
+class TranscriberUnavailable(TelegramAIError):
+    """The optional transcription image (or its model) is not on this machine.
+
+    Its own code rather than ``NOT_FOUND`` because it says something different:
+    nothing is missing from *Telegram*, an optional local component was never
+    installed. Not retryable — the identical request will keep failing until a
+    person builds the image — and the suggestion carries the command that fixes
+    it, because "transcription is unavailable" with no next step is how an
+    optional feature becomes an unexplained dead end.
+    """
+
+    code = ErrorCode.TRANSCRIBER_UNAVAILABLE
+    retryable = False
+
+
+class TranscriptionFailed(TelegramAIError):
+    """The transcriber ran and did not produce a transcript.
+
+    Retryable: the usual causes are a timeout and a container that lost its
+    scheduling slot, both of which a second attempt can survive. Deliberately
+    carries none of the container's own output — see the class docstring in
+    ``telegram_ai_cli/transcribe.py`` for why that text goes to the audit log
+    instead of into a message a model reads.
+    """
+
+    code = ErrorCode.TRANSCRIPTION_FAILED
+    retryable = True
 
 
 # --- upstream --------------------------------------------------------------

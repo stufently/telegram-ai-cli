@@ -225,6 +225,45 @@ class McpConfig(BaseModel):
     tools: list[str] | None = None
 
 
+class TranscribeConfig(BaseModel):
+    """Speech-to-text, in a container, on this machine only.
+
+    There is no API key here and no endpoint, because there is no remote
+    service: a voice message is somebody's actual voice, and the decision was
+    that it never leaves the host. The whole feature is an optional Docker
+    image, so an installation that never builds it carries no extra dependency
+    and sees no extra behaviour.
+
+    The model is not a setting. It is baked into the image at ``small``, which
+    is markedly better than ``base`` on Russian and still around half a
+    gigabyte; making it configurable here would mean a cache of several models,
+    a rule for choosing between them, and a manager for keeping them — a
+    subsystem, in place of a feature that shells out to one container.
+    """
+
+    image: str = "telegram-ai-cli-transcribe:latest"
+    #: Where the container reads the downloaded model from, so it is fetched
+    #: once. Not under `paths.downloads`: that directory holds media strangers
+    #: sent, and it is not a `paths.*` entry at all because nothing in the tool
+    #: writes here — `make transcribe-model` does, and the operation mounts it
+    #: read-only.
+    model_cache: Path = Field(default_factory=lambda: _state_home() / "whisper-models")
+    #: Longest audio accepted, in seconds. Ten minutes covers a voice message a
+    #: person actually recorded by hand; past that it is a recording, and
+    #: transcribing recordings is a batch job rather than a chat read.
+    max_audio_seconds: int = Field(default=600, ge=1, le=7200)
+    #: Wall clock for the whole container. Fifteen minutes, because the worst
+    #: case it has to survive is ten minutes of audio on a loaded CPU at real
+    #: time plus a cold start and a model load — a ceiling tight enough to be
+    #: hit by a hung container is a ceiling that fails legitimate work.
+    timeout_seconds: int = Field(default=900, ge=1)
+    docker_binary: str = "docker"
+    #: ``uid:gid`` the container runs as. ``None`` means this process's own,
+    #: which is the only answer that keeps files written to the mounted cache
+    #: owned by the user who ran the command. Root is refused outright.
+    run_as: str | None = None
+
+
 class AuditConfig(BaseModel):
     enabled: bool = True
     #: Off by default: the log records that a message was sent, not its text.
@@ -278,6 +317,7 @@ class Settings(BaseSettings):
     download: DownloadConfig = Field(default_factory=DownloadConfig)
     upload: UploadConfig = Field(default_factory=UploadConfig)
     mcp: McpConfig = Field(default_factory=McpConfig)
+    transcribe: TranscribeConfig = Field(default_factory=TranscribeConfig)
     audit: AuditConfig = Field(default_factory=AuditConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
 

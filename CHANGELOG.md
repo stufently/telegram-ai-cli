@@ -9,6 +9,41 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- `tg-ai media transcribe` / `telegram_media_transcribe` — turn one voice message
+  or audio file into text, **locally**. Whisper (model `small`) runs in a
+  *separate, optional* Docker image built by `make transcribe-image`; the main
+  image does not grow, the published package gains no dependency, and an
+  installation that never builds it sees only one extra tool that refuses with a
+  sentence naming the image and the command. There is no cloud speech API in this
+  path, not as a fallback and not as an option: the container runs with
+  `--network none`, one audio file bind-mounted read-only, the model cache
+  mounted separately, and this process's own `uid:gid` — never root. The model is
+  downloaded by an explicit `make transcribe-model`, which is the only invocation
+  of that image with a network at all. Effect `local_write` and capability
+  `read_media`, matching `media fetch`, whose download path it reuses rather than
+  growing a second one. `transcribe.max_audio_seconds` (default 600) is enforced
+  twice — once on the duration Telegram reported, which saves the transfer, and
+  again inside the container on the file it actually decodes, because the first
+  figure is metadata the uploader supplied — and `transcribe.timeout_seconds`
+  (default 900) bounds the container. The container also runs under a memory and
+  pid ceiling, which is not belt-and-braces: Whisper decodes the whole file
+  before it can report a duration, so the in-container length check happens
+  after the allocation it is meant to bound, and 100 MiB of opus (which
+  `download.max_file_bytes` permits) is several gigabytes decoded. A timeout
+  *removes* the container by name rather than only killing the `docker run`
+  client, which would leave it holding what the timeout was reclaiming.
+- **A transcript is untrusted text.** `transcript` joins `UNTRUSTED_FIELDS`, so
+  spoken words are delimited and defanged exactly like a typed message body. An
+  injection does not have to be written: somebody can say "ignore your
+  instructions" out loud, and it arrives as a JSON string indistinguishable from
+  one this project wrote. Nothing the transcription container prints reaches the
+  caller in an error message either — `Envelope.failure` has no trust boundary
+  around it, so container output goes to the audit log instead.
+- `TRANSCRIBER_UNAVAILABLE` and `TRANSCRIPTION_FAILED` error codes. The first is
+  not retryable and carries the command that fixes it, because "transcription is
+  unavailable" with no next step is how an optional feature becomes an
+  unexplained dead end; the second is, because a timeout usually is.
+
 - `tg-ai account block` / `telegram_plan_block_user` and `tg-ai account unblock` /
   `telegram_plan_unblock_user` — stop one person from writing to or calling this
   account, and let them back. **This is a setting of the account, not a chat

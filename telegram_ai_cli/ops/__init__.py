@@ -38,6 +38,7 @@ from . import (
     search,
     sessions,
     settings,
+    transcribe,
     watch,
     write,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "search",
     "sessions",
     "settings",
+    "transcribe",
     "watch",
     "write",
 ]

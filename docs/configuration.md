@@ -475,6 +475,104 @@ symlink on this host between the check and the write can still redirect it, the
 same as they could before roots existed. That is the local-user trust boundary
 the [threat model](threat-model.md) draws, not something roots move.
 
+## `transcribe`
+
+Local speech-to-text for voice messages and audio files. **Optional in the
+strongest sense**: it lives in a second Docker image that `make build` does not
+build, the published package gains no dependency from it, and an installation
+that never runs `make transcribe-image` sees no change in behaviour beyond one
+extra tool that refuses with an explanation.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `transcribe.image` | `telegram-ai-cli-transcribe:latest` | The optional image to run |
+| `transcribe.model_cache` | `<state>/whisper-models` | Where the model weights live, mounted into the container read-only |
+| `transcribe.max_audio_seconds` | `600` (10 min) | Longest audio accepted, checked twice |
+| `transcribe.timeout_seconds` | `900` (15 min) | Wall clock for the whole container |
+| `transcribe.docker_binary` | `docker` | The client to invoke |
+| `transcribe.run_as` | *this process's `uid:gid`* | `--user` for the container. Root is refused |
+
+**There is no API key, no endpoint and no fallback**, because there is no remote
+service. A voice message is somebody's actual voice; the decision was that it
+never leaves the host, and it is enforced rather than promised — the
+transcribing container runs with `--network none`. A process with no network
+interface cannot upload anything, whatever a future dependency of it decides to
+do.
+
+**The model is not configurable.** It is baked into the image at `small`, which
+is clearly better than `base` on Russian and still around half a gigabyte. A
+setting here would mean a cache of several models, a rule for choosing between
+them and something to keep them current — a subsystem, in place of a feature
+that shells out to one container.
+
+**Two commands, once, per host:**
+
+```bash
+make transcribe-image   # build the optional image
+make transcribe-model   # download the weights into transcribe.model_cache
+```
+
+The download is a separate step *because* transcription has no network. It is
+the only invocation of that image that ever gets one. Until both have run,
+`media transcribe` refuses with `TRANSCRIBER_UNAVAILABLE` and names the command
+that is missing — the image, or the model.
+
+**`max_audio_seconds` is checked twice, and the first check is not trusted.**
+Telegram reports a duration with the attachment, so the host refuses on it
+before spending the transfer; but that figure is metadata the *uploader*
+supplied. The container measures the file it actually decodes and refuses again,
+which is the check that holds when the declared duration is a lie. Ten minutes
+covers a voice message a person recorded by hand; past that it is a recording,
+and transcribing recordings is a batch job rather than a chat read.
+
+**The second check is the one that holds, and it needs a memory limit to be
+safe.** Whisper decodes the whole file before it can report a duration, so the
+in-container check runs *after* the allocation it bounds — and
+`download.max_file_bytes` permits 100 MiB of opus, which is many hours and
+several gigabytes once decoded. The container therefore runs with
+`--memory`/`--memory-swap` (2 GiB) and a `--pids-limit`, so a fabricated
+duration on a long file is an exit status rather than an out-of-memory host.
+Neither is a setting: they bound a fixed workload with a fixed model.
+
+**`timeout_seconds` is deliberately much larger than a request usually takes.**
+The worst case it has to survive is `max_audio_seconds` of audio on a loaded CPU
+at real time, plus a cold container start and a model load. A ceiling tight
+enough to catch a hung container would also kill legitimate work.
+
+A timeout **removes the container**, rather than only killing the `docker run`
+client: `--rm` disposes of a container that has exited, and a timed-out one has
+not — left alone it keeps exactly the CPU and memory the timeout existed to
+reclaim. The run is named for that reason.
+
+**`run_as` cannot reintroduce root.** `0` as either half is refused, as is
+anything that is not numeric `uid:gid`; an empty value means "unset" and falls
+back to this process's own ids. The check is on the value that reaches `--user`,
+not on the default, because putting it in the default branch is what let a
+config key turn the guarantee off.
+
+**`model_cache` must already exist** when a transcription runs, and a missing one
+is refused by name. `docker -v` *creates* a missing absolute source as an empty
+directory instead of failing, which would put a directory on disk that the
+operation never declared and then fail obscurely for want of a model.
+
+**What the container is given.** One file, bind-mounted read-only at a fixed
+path — not the download directory, which holds every attachment this account
+ever fetched — plus the model cache, mounted separately and **also read-only**,
+because the weights are put there by `make transcribe-model` and the
+transcribing container has no reason to write anything at all. That is why
+`media.transcribe` declares `paths.downloads` as its only local destination. It
+runs as this process's own `uid:gid`, never as root: a container writing to a
+bind mount as root leaves files behind the host user cannot delete, which is
+exactly the trap `make transcribe-model` — which *does* write — has to avoid.
+
+`transcribe.model_cache` is deliberately **not** a `paths.*` entry: nothing in
+the tool writes it, so it is not one of the destinations an MCP client's roots
+are checked against.
+
+The transcript is somebody else's sentence and crosses the same trust boundary
+as a message body — see
+[`media transcribe`](operations.md#telegram_media_transcribe--tg-ai-media-transcribe).
+
 ## `audit`
 
 | Key | Default | Meaning |

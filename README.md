@@ -49,6 +49,7 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai whois` | Who a `@username`, a numeric id, or an invite link resolves to |
 | `tg-ai chat members` | Who's in a chat, and who administers it |
 | `tg-ai media fetch` | Save a message's photo, video or document to a server-controlled path |
+| `tg-ai media transcribe` | Turn a voice message into text — Whisper in an optional container, on your own machine, with the network switched off |
 | `tg-ai archive sync` | Copy one named chat into a local SQLite archive, resuming where the last run stopped |
 | `tg-ai archive search` | Search that archive offline — substring **or regular expression**, by sender, by date — with no Telegram request at all |
 | `tg-ai archive status` | Which chats are archived, how many messages, and when each was last synced |
@@ -266,6 +267,7 @@ telegram_archive_sync
 telegram_archive_search
 telegram_archive_status
 telegram_archive_forget
+telegram_media_transcribe
 telegram_plan_block_user
 telegram_plan_unblock_user
 telegram_plan_set_chat_title
@@ -284,6 +286,8 @@ The five moderation tools exist so that every rights change has an undo. Grantin
 `tg-ai account add`, `tg-ai account login` and `tg-ai account login-qr` are absent from this list on purpose, and the registry refuses to publish them: signing in puts something in front of a person — the code Telegram sent to their phone, or a QR code only they can hold a phone up to — and enrolling an account widens the very fleet every allowlist is written against. The QR login has a third reason of its own: its `tg://login?token=…` *is* the login, so a tool that could ask for one would hand a caller the account itself.
 
 `telegram_media_fetch` looks like a read tool but isn't one — it writes a file, so it goes through the same server-controlled path handling as everything else that touches disk: the caller never supplies a path, the file lands under a download root with a generated name (`O_CREAT|O_EXCL|O_NOFOLLOW`, a size cap and a running quota), and only an opaque `artifact_id` comes back. If your MCP client advertises **roots** — the directories it sanctions — they are a ceiling on that one: a download directory outside every root is refused, by name, before the account is opened. It is never redirected to a directory the client would accept, because the configured path is what the quota is walked against and what the operator expects to find files in. The same ceiling covers the other two operations that write to this machine — `archive_sync` and `archive_forget`, judged by `paths.archive` rather than by a download directory they never touch. A client that doesn't implement roots constrains nothing; a client that advertises an *empty* list sanctions nothing, and those are different answers ([`docs/configuration.md`](docs/configuration.md#client-roots-and-where-an-mcp-call-writes)).
+
+`telegram_media_transcribe` turns a voice message into text **without the audio leaving your machine**. It is the one feature here that needs half a gigabyte of model weights, so it lives in a *separate, optional* Docker image: `make build` does not build it, the published package gains no dependency from it, and an installation that never runs `make transcribe-image` sees nothing but one extra tool that refuses with an explanation. Whisper (`small`) runs in that container with `--network none` and one file bind-mounted read-only — a process with no network interface cannot upload a recording, which is a stronger statement than a privacy policy. There is no cloud speech API here, not even as a fallback. The model is fetched once, by an explicit `make transcribe-model`, because that is the only invocation that ever has a network. And the transcript is treated exactly like a message body: it is somebody's words, an injection can simply be *spoken aloud*, so it comes back wrapped as untrusted content.
 
 `telegram_plan_send_file` is the same rule pointed the other way, and it is the more dangerous direction: a caller that could name any path on the host would have a read of arbitrary bytes with a delivery mechanism attached — a private key, the `.session` file that *is* the account, somebody's documents — into a chat other people read. So a file is sent from one directory (`paths.uploads`), containment is decided after symlinks are resolved, and the size ceiling is answered from `stat()` rather than from a transfer that fails halfway. The plan's summary names the file, its size, its type and **the form it arrives in**, because "send photo.jpg" hides the difference between a re-encoded picture and the original file. See [`docs/operations.md`](docs/operations.md#sending-a-file-where-the-bytes-may-come-from). `telegram_plan_set_chat_photo` publishes a chat photo through that same rule rather than a second copy of it — the weaker of two rules for "which local file may leave" is the one that becomes the hole.
 

@@ -69,6 +69,10 @@ _DEFANG = str.maketrans({_OPEN_DELIMITER: "[", _CLOSE_DELIMITER: "]"})
 UNTRUSTED_FIELDS: frozenset[str] = frozenset(
     {
         "text",
+        # Speech, turned into a string. The words are whoever recorded the
+        # audio, so an injection can simply be *spoken* — and it arrives here
+        # looking exactly like a field this project wrote itself.
+        "transcript",
         "caption",
         "title",
         "sender",

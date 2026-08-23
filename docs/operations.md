@@ -132,7 +132,9 @@ instruction — and neither substitutes for the other.
 
 ## Read operations
 
-Sixteen, all immediate on both surfaces. None of them marks anything as read:
+Every one of them immediate on both surfaces — the count is deliberately not
+written here, because a number in prose drifts the first time an operation is
+added and then reads as authoritative. None of them marks anything as read:
 `mark_read` exists only as an explicit plan, because an agent asked to "just
 look" at a chat must not change what the other person sees as unread. That
 includes `chat read`'s read-state block, which comes from `GetPeerDialogs` —
@@ -810,6 +812,65 @@ constrains nothing, and one that advertises an *empty* list sanctions nothing �
 those are different answers, and
 [`configuration.md`](configuration.md#client-roots-and-where-an-mcp-call-writes)
 has the table.
+
+### `telegram_media_transcribe` — `tg-ai media transcribe`
+
+Effect `local_write`, capability `read_media`, `local_path` `downloads` — the
+same three as `media_fetch`, for the same reasons: it downloads the audio, so it
+writes a file; the audio is media, so it is gated as media; and the only thing it
+puts on disk is that file. It is not a plan; nothing is written to Telegram.
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `account` | string | — | Which account to use |
+| `chat` | string | **required** | Chat id, `@username`, or `t.me` link |
+| `message_id` | int ≥ 1 | — | Id of the voice message or audio file. Omit only when `chat` is a link that names it |
+| `language` | ISO 639-1 (`^[a-z]{2}$`) | — | Transcribe as this language. Omit to auto-detect |
+
+| Field | Meaning |
+| --- | --- |
+| `transcript` | What was said. **Wrapped as untrusted** |
+| `language` | Detected, or the one that was asked for |
+| `language_detected` | `false` when `language` was given, so the two are never confused |
+| `language_probability` | Whisper's confidence in the detection |
+| `duration_seconds` | Measured from the file, not taken from Telegram's metadata |
+| `model` | `small` |
+| `artifact_id` | The downloaded audio, which stays, under the media quota |
+
+**It runs on this machine and nowhere else.** Whisper (`small`) executes in a
+separate, optional Docker image with `--network none`. There is no cloud speech
+API here, not as a fallback and not as an option: a voice message is somebody's
+actual voice, and a container with no network interface is a stronger statement
+about where that audio goes than any amount of documentation. Both mounts — the
+one audio file and the model cache — are read-only, so the container itself
+writes nothing at all.
+
+**Absence is a sentence, not a stack trace.** Most installations will never
+build the image, so that path is designed rather than merely handled: the
+operation fails with `TRANSCRIBER_UNAVAILABLE` naming the image and the command
+that builds it (`make transcribe-image`) or, when the image is there and the
+weights are not, the command that downloads them (`make transcribe-model`). It
+never returns an empty transcript, which would read as "the speaker said
+nothing".
+
+**The transcript is a stranger speaking.** An injection can simply be *said out
+loud*, and it arrives as a JSON string indistinguishable from one this project
+wrote. So `transcript` is in `UNTRUSTED_FIELDS` and crosses the same boundary as
+a message body: delimited, and defanged so a speaker who pronounces the marker
+cannot close the frame around their own words.
+
+**Nothing the container prints appears in an error message.** `Envelope.failure`
+neither wraps untrusted text nor defangs it, so the container's own output goes
+to the audit log and the caller sees this project's words plus an exit status.
+
+**The length ceiling is checked twice.** `transcribe.max_audio_seconds` is
+applied first to the duration Telegram reported — which saves the whole transfer
+when the answer is "too long" — and again inside the container, against the file
+it actually decodes, because the first figure is metadata the uploader supplied.
+Both refusals are `ARTIFACT_TOO_LARGE` and **not retryable**: the same file is
+too long every time, and a retry would only download it again. The container's
+memory ceiling, the timeout and the rest are in
+[`transcribe`](configuration.md#transcribe).
 
 ---
 

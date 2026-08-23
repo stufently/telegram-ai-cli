@@ -20,6 +20,14 @@ not just from the size Telegram advertised. The caller gets an opaque
 Effect is ``LOCAL_WRITE`` rather than ``READ`` for the same reason: it consumes
 disk, and something that consumes a shared resource should not be classified
 with the operations that consume nothing.
+
+Two pieces of it are exported rather than private, because a second operation
+needs the *same* download and must not grow a second one:
+:func:`resolve_message_for_media` (resolve, refuse, find the message) and
+:func:`fetch_message_media` (ceilings, quota, the exclusive create, the audit
+event). ``media.transcribe`` calls both. A parallel implementation would be a
+second place for the path rules to be right, which is a second place for them to
+be wrong.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ import hashlib
 import os
 import re
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +53,7 @@ from ..errors import (
     TelegramError,
 )
 from ..opspec import REGISTRY, Effect, Operation
-from ..safety import Capability
+from ..safety import Capability, PeerRef
 from ._client import open_account
 from ._common import (
     ReadInput,
@@ -169,94 +178,157 @@ def _create_artifact(root: Path, name: str) -> int:
     )
 
 
-async def handle_media_fetch(ctx: OperationContext, params: MediaFetchInput) -> Envelope:
+@dataclass(frozen=True, slots=True)
+class AddressedMedia:
+    """One message with an attachment, already cleared by the policy kernel."""
+
+    entity: Any
+    ref: PeerRef
+    message: Any
+    message_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class FetchedArtifact:
+    """A complete file on this machine, and how to name it to a caller."""
+
+    artifact_id: str
+    path: Path
+    bytes: int
+    sha256: str
+
+
+async def resolve_message_for_media(
+    ctx: OperationContext,
+    client: Any,
+    chat: str,
+    message_id: int | None,
+    *,
+    action: str,
+) -> AddressedMedia:
+    """Turn a caller's chat reference into a message, refusing along the way.
+
+    The order is the order every read uses and the reason it is shared: hard
+    denylist, then capability, then the link's own shape, and only then a call
+    to Telegram. ``action`` is the string that appears in the audit log, so a
+    refusal says which operation was refused rather than which helper noticed.
+    """
+    entity, link = await resolve_chat_ref(client, chat, what=action)
+    ref = peer_ref(entity)
+    guard_hard_denied(ctx, ref, action=action)
+    require_peer(ctx, Capability.READ_MEDIA, ref, action=action)
+    guard_message_link(ref, link, what=action)
+
+    resolved_id = message_id_from(message_id, link, what=action)
+
+    with telegram_errors(what=action):
+        message = await client.get_messages(entity, ids=resolved_id)
+    if message is None or getattr(message, "media", None) is None:
+        raise NotFound(f"message {resolved_id} in that chat has no attachment to fetch")
+
+    return AddressedMedia(entity=entity, ref=ref, message=message, message_id=resolved_id)
+
+
+async def fetch_message_media(
+    ctx: OperationContext,
+    client: Any,
+    addressed: AddressedMedia,
+    *,
+    account_label: str,
+    action: str,
+) -> FetchedArtifact:
+    """Download the attachment under every ceiling, or leave nothing behind.
+
+    Shared with ``media.transcribe`` so that the exclusive-create, the symlink
+    refusal, the size cap counted on the bytes rather than on the advertised
+    figure, and the quota are written once. An operation that reimplemented any
+    of them would be a second, quieter answer to the same question.
+    """
     download = ctx.settings.download
     root = ctx.settings.paths.downloads
+    message = addressed.message
 
-    async with open_account(ctx, params.account) as account:
-        entity, link = await resolve_chat_ref(account.client, params.chat, what="media.fetch")
-        ref = peer_ref(entity)
-        guard_hard_denied(ctx, ref, action="media.fetch")
-        require_peer(ctx, Capability.READ_MEDIA, ref, action="media.fetch")
-        guard_message_link(ref, link, what="media.fetch")
-
-        message_id = message_id_from(params.message_id, link, what="media.fetch")
-
-        with telegram_errors(what="media.fetch"):
-            message = await account.client.get_messages(entity, ids=message_id)
-        if message is None or getattr(message, "media", None) is None:
-            raise NotFound(f"message {message_id} in that chat has no attachment to fetch")
-
-        advertised = getattr(getattr(message, "file", None), "size", None)
-        if advertised and advertised > download.max_file_bytes:
-            raise ArtifactTooLarge(
-                f"attachment is {advertised} bytes, over download.max_file_bytes "
-                f"({download.max_file_bytes})"
-            )
-
-        remaining = download.total_quota_bytes - _directory_usage(root)
-        if remaining <= 0 or (advertised and advertised > remaining):
-            raise QuotaExceeded(
-                "the download directory is at download.total_quota_bytes",
-                suggestion="Clear old artifacts, or raise download.total_quota_bytes.",
-            )
-
-        artifact_id = secrets.token_hex(16)
-        path = root / f"{artifact_id}{_extension(message)}"
-        fd = _create_artifact(root, path.name)
-
-        event = ctx.audit.attempt(
-            action="media.fetch",
-            account=account.label,
-            actor=ctx.actor,
-            peer_id=ref.peer_id,
-            extra={"message_id": message_id, "artifact_id": artifact_id},
+    advertised = getattr(getattr(message, "file", None), "size", None)
+    if advertised and advertised > download.max_file_bytes:
+        raise ArtifactTooLarge(
+            f"attachment is {advertised} bytes, over download.max_file_bytes "
+            f"({download.max_file_bytes})"
         )
 
-        try:
-            with os.fdopen(fd, "wb") as raw:
-                writer = _CappedWriter(
-                    raw, max_bytes=download.max_file_bytes, quota_bytes=remaining
-                )
-                try:
-                    with telegram_errors(what="media.fetch"):
-                        await asyncio.wait_for(
-                            account.client.download_media(message, file=writer),
-                            timeout=download.timeout_seconds,
-                        )
-                except TimeoutError as exc:
-                    # Retryable on purpose: a slow transfer is not a refusal,
-                    # and the partial file is removed below either way.
-                    raise TelegramError(
-                        f"download exceeded download.timeout_seconds ({download.timeout_seconds}s)",
-                        retry_after=download.timeout_seconds,
-                    ) from exc
-                raw.flush()
-                os.fsync(raw.fileno())
-        except BaseException as exc:
-            # A partial artifact is worse than none: it looks like a complete
-            # file, counts against the quota, and would be read as truth.
-            path.unlink(missing_ok=True)
-            ctx.audit.outcome(
-                event, status="failed", error_code=type(exc).__name__, detail=str(exc)[:200]
-            )
-            raise
+    remaining = download.total_quota_bytes - _directory_usage(root)
+    if remaining <= 0 or (advertised and advertised > remaining):
+        raise QuotaExceeded(
+            "the download directory is at download.total_quota_bytes",
+            suggestion="Clear old artifacts, or raise download.total_quota_bytes.",
+        )
 
-        ctx.audit.outcome(event, status="applied", detail=f"{writer.written} bytes")
+    artifact_id = secrets.token_hex(16)
+    path = root / f"{artifact_id}{_extension(message)}"
+    fd = _create_artifact(root, path.name)
+
+    event = ctx.audit.attempt(
+        action=action,
+        account=account_label,
+        actor=ctx.actor,
+        peer_id=addressed.ref.peer_id,
+        extra={"message_id": addressed.message_id, "artifact_id": artifact_id},
+    )
+
+    try:
+        with os.fdopen(fd, "wb") as raw:
+            writer = _CappedWriter(raw, max_bytes=download.max_file_bytes, quota_bytes=remaining)
+            try:
+                with telegram_errors(what=action):
+                    await asyncio.wait_for(
+                        client.download_media(message, file=writer),
+                        timeout=download.timeout_seconds,
+                    )
+            except TimeoutError as exc:
+                # Retryable on purpose: a slow transfer is not a refusal,
+                # and the partial file is removed below either way.
+                raise TelegramError(
+                    f"download exceeded download.timeout_seconds ({download.timeout_seconds}s)",
+                    retry_after=download.timeout_seconds,
+                ) from exc
+            raw.flush()
+            os.fsync(raw.fileno())
+    except BaseException as exc:
+        # A partial artifact is worse than none: it looks like a complete
+        # file, counts against the quota, and would be read as truth.
+        path.unlink(missing_ok=True)
+        ctx.audit.outcome(
+            event, status="failed", error_code=type(exc).__name__, detail=str(exc)[:200]
+        )
+        raise
+
+    ctx.audit.outcome(event, status="applied", detail=f"{writer.written} bytes")
+    return FetchedArtifact(
+        artifact_id=artifact_id, path=path, bytes=writer.written, sha256=writer.sha256
+    )
+
+
+async def handle_media_fetch(ctx: OperationContext, params: MediaFetchInput) -> Envelope:
+    async with open_account(ctx, params.account) as account:
+        addressed = await resolve_message_for_media(
+            ctx, account.client, params.chat, params.message_id, action="media.fetch"
+        )
+        fetched = await fetch_message_media(
+            ctx, account.client, addressed, account_label=account.label, action="media.fetch"
+        )
 
     data: dict[str, Any] = {
-        "artifact_id": artifact_id,
-        "bytes": writer.written,
-        "sha256": writer.sha256,
-        "chat": peer_summary(entity),
-        "message_id": message_id,
-        "media": media_summary(message),
+        "artifact_id": fetched.artifact_id,
+        "bytes": fetched.bytes,
+        "sha256": fetched.sha256,
+        "chat": peer_summary(addressed.entity),
+        "message_id": addressed.message_id,
+        "media": media_summary(addressed.message),
     }
     if ctx.actor == "cli":
         # The person at the terminal owns this directory and needs to open the
         # file; a tool caller gets the opaque id, because a path it did not
         # choose is not a path it needs to know.
-        data["path"] = str(path)
+        data["path"] = str(fetched.path)
 
     return telegram_result(ctx, data, account=account.label, returned=1, total=1)
 

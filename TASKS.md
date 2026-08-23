@@ -15,6 +15,43 @@ is
 
 ## Known gaps
 
+- [ ] **Nothing verifies the transcription image in CI.** `tests/test_transcribe.py`
+      fakes the container at `subprocess.run`, which is what lets it assert the
+      command (`--network none`, one read-only file, a non-root `--user`) and the
+      image-absent path without a half-gigabyte model in the test job. What it
+      cannot catch is `Dockerfile.transcribe` failing to build, or the entrypoint's
+      exit codes drifting from the constants in `telegram_ai_cli/transcribe.py`.
+      Both were verified by hand against the real image on 2026-08-23 (exit 3 for
+      a missing model, exit 4 for audio over the ceiling, a clean transcript with
+      the network off). A `container`-style CI job would pin them, but it downloads
+      the model on every run, so it wants a cache decision first.
+
+- [ ] **A cancelled transcription leaves its container running until it times
+      out.** `asyncio.to_thread` cannot be cancelled: if the MCP call goes away
+      mid-transcription, the worker thread keeps waiting on `subprocess.run` and
+      the container keeps decoding. It is bounded — the thread's own timeout
+      fires and removes the container by name — but the ceiling is
+      `transcribe.timeout_seconds` rather than "immediately". Fixing it properly
+      means `asyncio.create_subprocess_exec` and a cancellation handler, which is
+      a different shape of code from every other operation here. Raised by review
+      alongside the timeout-kills-only-the-client bug, which *was* fixed.
+
+- [ ] **The in-container length check runs after the file is decoded.**
+      faster-whisper reports a duration only once it has decoded, so
+      `--memory`/`--memory-swap` are what actually bound a fabricated duration on
+      a very long file: the container is killed rather than the host. A streaming
+      decode capped at `max_audio_seconds` would check before allocating, which
+      is the right answer if this ever needs to run without cgroup limits.
+
+- [ ] **A transcript is not archived with its message.** `media transcribe`
+      answers a question; it does not write the text anywhere. Transcribing the
+      same voice message twice runs Whisper twice and leaves two copies of the
+      audio under the download quota. Storing transcripts would mean deciding
+      where (the archive? next to the artifact?), when they expire, and whether a
+      chat removed from the allowlist stops answering from the store — the same
+      questions the archive already answers, and worth answering the same way
+      rather than a second way.
+
 - [ ] **A chat photo can be replaced but not removed.** `chat.set_photo` takes a
       required `path`, and Telegram clears a photo with a distinct empty object
       rather than an absent file. Making `path` optional would weaken the one
