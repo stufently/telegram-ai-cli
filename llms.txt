@@ -1,0 +1,64 @@
+# telegram-ai-cli
+
+> A CLI and MCP (Model Context Protocol) server, built from one Python codebase,
+> that lets an AI agent — Claude, Codex, or any MCP client — read and act on a
+> personal Telegram account over MTProto (Telethon), the protocol Telegram's own
+> apps use, not the Bot API. Reads (chats, messages, search, whois, members,
+> media) run immediately. Anything that changes something on Telegram (send,
+> edit, delete, forward, join, leave, invite, promote, mark read, change profile)
+> goes through an explicit plan, then a separate apply step, never straight from
+> a model's tool call. Chats are gated by an allowlist (private messages closed
+> until named explicitly; `777000` and Saved Messages closed unconditionally),
+> every outgoing action is written to a two-phase audit log, and rate limits
+> persist across process restarts.
+
+## Key facts
+
+- Package/command: `telegram-ai-cli` (PyPI name reserved for a future release;
+  not published yet), CLI binary `tg-ai`.
+- License: MIT.
+- Language: Python, requires 3.12+.
+- Protocol library: Telethon (MTProto), not the Telegram Bot API.
+- Two surfaces from one codebase: `tg-ai <command>` (CLI) and `tg-ai mcp`
+  (stdio MCP server) — same operation registry, same JSON contract.
+- Safety model: plan-and-apply for every write; no MCP tool applies a plan.
+  For MCP clients that also have shell access (Claude Code, Codex), the
+  project states plainly that this boundary is not absolute — see the Safety
+  section of the README and `docs/threat-model.md`.
+- Status as of 2026-08: pre-alpha, under active development. Not yet published
+  to PyPI or an MCP registry (a deliberate, separate decision — a package name
+  in a public registry is claimed permanently).
+
+## Primary sources
+
+- [README](https://github.com/stufently/telegram-ai-cli/blob/main/README.md):
+  what it does, install and configure, how to add it to Claude Code, Claude
+  Desktop, Codex or Cursor, the MCP tool list, the JSON contract, and an FAQ
+  written against real questions people ask about Telegram automation and MCP.
+- [SECURITY.md](https://github.com/stufently/telegram-ai-cli/blob/main/SECURITY.md):
+  vulnerability reporting (GitHub Security Advisories, not email), scope, and
+  the design rationale behind each safety control.
+- [docs/threat-model.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/threat-model.md):
+  the full threat model, including the honest limit of the plan/apply
+  approval boundary and the path to a stronger one (a separate OS principal,
+  or a TOTP-gated apply) that v0.1 does not implement.
+- [CHANGELOG.md](https://github.com/stufently/telegram-ai-cli/blob/main/CHANGELOG.md):
+  what has actually shipped, in Keep a Changelog format.
+- [CITATION.cff](https://github.com/stufently/telegram-ai-cli/blob/main/CITATION.cff):
+  how to cite this project.
+
+## Related projects, same author (GitHub: stufently)
+
+- [zabbix-ai-cli](https://github.com/stufently/zabbix-ai-cli) — the same
+  CLI-plus-MCP-server, plan-and-apply pattern, applied to Zabbix monitoring.
+- [yandex-mcp](https://github.com/stufently/yandex-mcp) — MCP servers for
+  Yandex Search, Wordstat, Webmaster, Metrika and Direct.
+
+## What this is not
+
+- Not a Telegram Bot API wrapper — it operates a personal user account, which
+  has different capabilities (and different risks) than a bot account.
+- Not a bulk-messaging or member-scraping tool. Telegram limits and bans
+  accounts for that kind of automation regardless of what client sent it.
+- Not a `tdata` format converter — `tdata` parsing is delegated to
+  `opentele-ng`.

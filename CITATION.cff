@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "telegram-ai-cli"
+abstract: >-
+  AI-first CLI and MCP (Model Context Protocol) server for managing personal
+  Telegram accounts over MTProto, with a plan-and-apply approval workflow,
+  chat allowlists, and an audit log for every outgoing action.
+authors:
+  - given-names: Roman
+    family-names: T
+    alias: stufently
+repository-code: "https://github.com/stufently/telegram-ai-cli"
+url: "https://github.com/stufently/telegram-ai-cli"
+license: MIT
+keywords:
+  - telegram
+  - mtproto
+  - telethon
+  - userbot
+  - mcp
+  - model-context-protocol
+  - claude-code
+  - ai-agents
+  - llm-tools
+  - cli
+  - automation
+type: software

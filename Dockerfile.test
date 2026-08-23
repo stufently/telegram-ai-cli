@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# Standalone test image — separate from Dockerfile (the distributable runtime
+# image) because it installs the `test` extra and pytest tooling that has no
+# business in the shipped artifact.
+#
+# `tests/` is intentionally NOT baked into this image (it's excluded by
+# .dockerignore along with docs/). The package is installed editable so that
+# `make test`'s runtime bind-mount of the repo (see Makefile) makes tests/ and
+# any source edit visible immediately, without a rebuild — and the exact same
+# image still works in CI, where the workflow mounts the checked-out workspace
+# the same way.
+FROM python:3.14-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+
+COPY pyproject.toml constraints.txt ./
+COPY telegram_ai_cli/ ./telegram_ai_cli/
+
+# Editable install: site-packages holds an import pointer back to /app rather
+# than a frozen copy, so a bind-mounted /app (fresh source, plus tests/ which
+# isn't even present at build time) is picked up without reinstalling.
+RUN pip install -c constraints.txt -e ".[test]"
+
+ENTRYPOINT ["pytest"]
+CMD ["-q"]

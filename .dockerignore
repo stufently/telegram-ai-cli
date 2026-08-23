@@ -1,0 +1,35 @@
+# Keeps the build context small and, more importantly, keeps things that must
+# never end up in an image layer (live session state, secrets) out of reach
+# even if a Dockerfile stage were ever changed to COPY . . carelessly.
+.git/
+.github/
+docs/
+tests/
+*.md
+__pycache__/
+*.py[codz]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Live account/session state — never belongs in an image.
+sessions/
+accounts/
+tdata/
+*.session
+*.session-journal
+*.api.json
+state/
+
+# Secrets and local overrides.
+.env
+.env.*
+!.env.example
+
+# Editor/OS cruft.
+.vscode/
+.idea/
+.DS_Store

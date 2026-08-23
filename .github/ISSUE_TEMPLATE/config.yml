@@ -1,0 +1,7 @@
+# Blank issues stay off so security reports are pointed at the right channel
+# and everything else picks up its structured template.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/stufently/telegram-ai-cli/security/advisories/new
+    about: Do not open a public issue for security reports — use GitHub Security Advisories (see SECURITY.md).

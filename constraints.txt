@@ -1,0 +1,29 @@
+# Exact versions we actually build and test against.
+#
+# pyproject.toml declares floors (">=") because a *published package* that pins
+# exact versions breaks every downstream environment that already has a working
+# newer dependency installed. This file is the opposite: it fixes the precise
+# versions used to build the Docker image and to run CI, so "it works in CI" and
+# "it works in the container" mean the same locked dependency graph.
+#
+# Update deliberately, not by drift: bump a line here only after checking the
+# new release notes, never by blindly running `pip install -U`. Verified fresh
+# as of 2026-08-23 — see docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md §3.
+telethon==1.44.0
+cryptg==0.6.0
+opentele-ng==1.4.0
+click==8.4.2
+pydantic==2.13.4
+pydantic-settings==2.15.0
+PyYAML==6.0.3
+python-socks==3.0.0
+cryptography==50.0.0
+mcp==2.0.0
+
+# Test-only pins (installed together with the `test` extra).
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+
+# Build backend pin — keeps the builder stage reproducible too.
+setuptools==84.0.0

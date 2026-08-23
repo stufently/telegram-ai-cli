@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-ai-cli"
+version = "0.1.0.dev0"
+description = "AI-first CLI and MCP server for Telegram user accounts over MTProto, with plan-and-apply approval, chat allowlists and an audit log for every outgoing message."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Roman T" }]
+keywords = [
+    "telegram",
+    "mtproto",
+    "telethon",
+    "userbot",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-code",
+    "ai-agents",
+    "llm-tools",
+    "cli",
+    "automation",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
+
+# Floors, not pins. A published package that pins exact versions breaks every
+# environment that already has a working newer one, so these are the oldest
+# releases we are willing to claim support for. Exact versions are frozen in
+# constraints.txt, which is what the Docker image and CI install.
+#
+# Each floor sits at a major we can actually stand behind rather than at the
+# oldest release that happens to import: python-socks and pytest-asyncio have
+# both shipped a major since, and promising the previous one would be a promise
+# nothing here ever exercises.
+dependencies = [
+    "telethon>=1.44,<2",
+    "cryptg>=0.6",
+    "opentele-ng>=1.4",
+    "click>=8.2,<9",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.8,<3",
+    "PyYAML>=6.0.2",
+    "python-socks[asyncio]>=2.7,<4",
+    "cryptography>=45",
+    "mcp>=2.0,<3",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=7",
+]
+
+[project.urls]
+Homepage = "https://github.com/stufently/telegram-ai-cli"
+Repository = "https://github.com/stufently/telegram-ai-cli"
+Issues = "https://github.com/stufently/telegram-ai-cli/issues"
+Changelog = "https://github.com/stufently/telegram-ai-cli/blob/main/CHANGELOG.md"
+Security = "https://github.com/stufently/telegram-ai-cli/blob/main/SECURITY.md"
+
+[project.scripts]
+tg-ai = "telegram_ai_cli.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["telegram_ai_cli*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:telegram_ai_cli.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "S"]
+# S101 (assert) is the idiom pytest is built on.
+per-file-ignores = { "tests/*" = ["S101"] }

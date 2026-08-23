@@ -1,0 +1,93 @@
+# Third-party actions are pinned to a commit SHA, not a tag: tags on other
+# people's repos are mutable (a maintainer can force-move `v7` to point at
+# different, possibly compromised, code without our workflow file changing at
+# all). The `# vX.Y.Z` comment next to each SHA is only a human-readable
+# label; Actions never resolves it. Verified against the upstream repos on
+# 2026-08-23:
+#   actions/checkout      v7.0.1  -> 3d3c42e5aac5ba805825da76410c181273ba90b1
+#   actions/setup-python   v7.0.0  -> 5fda3b95a4ea91299a34e894583c3862153e4b97
+# Bumping either pin later requires re-verifying the SHA against the tag, not
+# just editing the version comment.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch/PR supersedes the still-running one.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Reuses the same `make lint` a developer runs locally (Dockerfile-free,
+      # official ruff image, read-only mount) so CI and local checks can never
+      # silently drift apart into two different lint configs.
+      - run: make lint
+
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirrors requires-python's floor (3.12) through the pin used for the
+        # Docker image and constraints.txt (3.14) — the whole supported range.
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install with pinned constraints
+        run: python -m pip install -c constraints.txt ".[test]"
+      - name: Run tests
+        run: pytest -q
+
+  smoke:
+    name: smoke (MCP stdio handshake)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Install package
+        run: python -m pip install -c constraints.txt .
+      # Deliberately NOT just `python -c "import telegram_ai_cli.mcp_server"`:
+      # an import proves the module parses, not that a client can actually
+      # talk to the server. scripts/smoke_mcp.py launches `tg-ai mcp`, does
+      # the real MCP initialize handshake, and asserts tools/list answers
+      # within a timeout — the only way a background server that never exits
+      # on its own can meaningfully fail this job.
+      - name: MCP stdio smoke test
+        run: python scripts/smoke_mcp.py
+
+  container:
+    name: container (build + non-root)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build runtime image
+        run: docker build -f Dockerfile -t telegram-ai-cli:ci .
+      - name: Verify the container does not run as root
+        run: |
+          uid="$(docker run --rm --entrypoint id telegram-ai-cli:ci -u)"
+          echo "container UID: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::container runtime user is root (UID 0)"
+            exit 1
+          fi
+      - name: Verify the entrypoint actually runs
+        # No --entrypoint override needed: the image's own ENTRYPOINT is
+        # ["tg-ai"] and its default CMD is ["--help"].
+        run: docker run --rm telegram-ai-cli:ci

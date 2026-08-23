@@ -216,3 +216,41 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# telegram-ai-cli: live account material. Never commit any of this.
+#
+# A Telethon .session file holds a plaintext 256-bit MTProto auth key. Anyone
+# who obtains it controls the account until the session is revoked by hand, so
+# these patterns are a hard requirement, not tidiness.
+# ---------------------------------------------------------------------------
+# Anchored to the repo root with a leading slash. Unanchored, `accounts/`
+# also matched the telegram_ai_cli/accounts/ source package and silently kept
+# the entire module out of the repository.
+/sessions/
+/accounts/
+/tdata/
+/tdatas/
+*.session
+*.session-journal
+*.session-wal
+*.session-shm
+*.session.lock
+*.api.json
+*.string
+
+# Local state: plan database, audit log, downloaded media, secret key material.
+/state/
+/downloads/
+/audit/
+*.audit.jsonl
+/secret.key
+
+# Local config may carry api_id/api_hash and proxy credentials.
+tgai.yaml
+config/tgai.yaml
+.env.*
+!.env.example
+
+# Private denylist for test_no_private_data (kept outside the repo by design).
+private-denylist.txt
