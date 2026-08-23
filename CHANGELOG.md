@@ -108,8 +108,14 @@ before that, breaking changes can happen on any `0.x` release.
   waking once per reply would re-create that cost inside the tool meant to
   remove it. **The wait always ends:** `timeout_sec` is capped in the published
   schema at 300s, because an MCP client cannot abandon a call it is waiting on;
-  returning with no events at the ceiling is a result (`events: []`,
-  `stopped_because: "timeout"`, `waited_sec`), not an error. **A refused chat
+  the ceiling is absolute and covers connecting, resolving named chats and
+  resolving an event's chat, since a bound measured from the first read would
+  bound the waiting rather than the call. Returning with no events at the
+  ceiling is a result (`events: []`, `stopped_because: "timeout"`,
+  `waited_sec`), not an error. The subscription is opened *before* the named
+  chats are resolved — a message arriving during that round trip would
+  otherwise be dispatched with nobody listening — and its queue is bounded at
+  1000, because nothing here can slow a flood down. **A refused chat
   leaves no trace:** the policy filter runs *before* the debounce logic, so a
   message from a peer the configuration does not permit neither starts a burst
   nor extends one — and unlike `telegram_search` this operation deliberately
@@ -185,9 +191,15 @@ before that, breaking changes can happen on any `0.x` release.
   (`NOT_FOUND`, with "read it with `chat read`"), `topic_id` on one is
   `INVALID_INPUT`, and so is `topic_id` together with `search` — Telegram's
   replies call carries no query, and Telethon prefers it over the search
-  branch, so the two together would drop one of them in silence. A topic page
-  still reports the *chat's* read pointers, since a forum has one dialog for
-  all its topics; that is said in a warning rather than left to be misread.
+  branch, so the two together would drop one of them in silence. Reading a
+  forum *without* a topic stays allowed and gains a warning instead: it is
+  several conversations interleaved into one list, and every row already says
+  which topic it came from. A topic page still reports the *chat's* read
+  pointers, since a forum has one dialog for all its topics; that too is said
+  in a warning rather than left to be misread. All of these refusals name the
+  chat by id and never by its title — an error is assembled outside
+  `telegram_result`, and `Envelope.failure` neither wraps nor defangs, so a
+  quoted title would leave as unmarked stranger-written text.
 - `topic_id` on serialized messages, so a forum message says which topic it is in.
 - Project scaffolding: MIT license, `pyproject.toml` targeting Python 3.12+ with
   dependency floors (`telethon>=1.44,<2`, `click>=8.2,<9`, `pydantic>=2.11,<3`,

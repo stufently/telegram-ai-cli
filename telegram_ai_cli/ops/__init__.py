@@ -20,7 +20,7 @@ never had it installed.
 from __future__ import annotations
 
 from ..opspec import REGISTRY
-from . import accounts, chats, contacts, fleet, inbox, media, messages, search, write
+from . import accounts, chats, contacts, fleet, inbox, media, messages, search, watch, write
 
 __all__ = [
     "REGISTRY",
@@ -32,6 +32,7 @@ __all__ = [
     "media",
     "messages",
     "search",
+    "watch",
     "write",
 ]
 

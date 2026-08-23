@@ -249,9 +249,18 @@ keeps working across that switch. Three things are refused rather than guessed:
 - **A `topic_id` that disagrees with the topic in the link** — the caller named
   two different threads, and preferring one silently pages a topic nobody asked for.
 
+Reading a forum **without** `topic_id` is still allowed — "what happened across
+the forum" is a real question, and every row carries its own `topic_id` — but it
+comes back with a warning, because the page is several conversations interleaved
+into one list and the messages either side of one are usually not a reply to it.
+
 `data.read_state` on a topic page still describes the **whole chat**: a forum has
 one dialog for all of its topics. That is stated in `warnings` rather than left to
 be misread — `chat topics` is where per-topic unread counts live.
+
+Refusals here name the chat by **id, not by title**: an error is built outside
+`telegram_result`, and `Envelope.failure` neither wraps nor defangs what it
+carries, so a quoted title would arrive as unmarked stranger-written text.
 
 **Two link shapes are refused rather than interpreted**, in every operation that
 takes one (`chat read`, `search`, `media fetch`, `message reactions`), and the
@@ -499,9 +508,14 @@ first message.
 **The wait always ends.** `timeout_sec` is capped in the published schema, so no
 argument produces an unbounded call — an MCP client has no way to abandon a tool
 call it is waiting on, and a call that could block forever is a hung session
-rather than a slow one. Returning with no events at the ceiling is a *result*,
+rather than a slow one. The ceiling is absolute and starts before anything else:
+connecting the account, resolving the named chats and resolving an event's chat
+are all network round trips, and a ceiling measured from the first read would
+bound the *waiting* rather than the call. A setup slow enough to consume the
+whole budget therefore returns immediately with no events, which is honest
+rather than surprising. Returning with no events at the ceiling is a *result*,
 not an error: `events: []`, `stopped_because: "timeout"`, and `waited_sec`
-saying how long it actually waited.
+saying how long the call actually took.
 
 **A refused chat leaves no trace.** The policy filter runs *before* the debounce
 logic, so a message from a peer the configuration does not permit does not start
@@ -512,6 +526,16 @@ caller may not read is itself the leak, because it says a specific conversation
 was busy at a specific second. Naming a chat in `chats` narrows the watch; it
 never widens it, so a private chat that `safety.read.dms` does not allowlist is
 refused loudly when named and silently ignored when it isn't.
+
+**The subscription is opened before the chats are resolved**, and that ordering
+is deliberate: resolving a named chat is a round trip, and a message arriving
+during it would otherwise be dispatched with nobody listening — leaving the
+caller to wait out the whole timeout for something that had already come and
+gone. The update queue behind it is bounded (1000 messages); nothing here can
+slow a flood down, so the alternative is holding every message a hostile chat
+cares to send. Overflow drops the newest rather than evicting a burst already
+being collected, and the drops are not counted in the result for the same
+reason the withheld events are not.
 
 `data`:
 

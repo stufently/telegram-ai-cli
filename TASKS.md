@@ -97,6 +97,17 @@ is
       is lost. `message.reply` / `message.edit` / `message.delete` are the ones
       where a pasted link is the natural input, and they should take the message
       id from it the way `media.fetch` and `message.reactions` now do.
+- [ ] **`Envelope.failure` is outside the trust boundary.** `telegram_result`
+      wraps and defangs a *successful* payload; an error is assembled from an
+      exception and neither wrapped nor defanged, and `meta.untrusted_content`
+      is not set on it. So any refusal that quotes Telegram-authored text — a
+      chat title, a message body — hands the reader an unmarked stranger's
+      sentence in the one field it has most reason to trust. The forum
+      operations avoid it by naming chats by id (raised by review, 2026-08-23);
+      the general fix is to defang `error.message` / `error.suggestion` where
+      the envelope is built, so it stops depending on every call site
+      remembering.
+
 - [ ] **Topic listings serve one page.** `chat.topics` sends
       `messages.getForumTopics` with a zeroed cursor, so a forum with more
       topics than `limit` reports `truncated` and has no way to fetch the rest.
