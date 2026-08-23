@@ -423,13 +423,15 @@ A folder belongs to an account, so a fleet-wide sweep resolves the name once per
 account. An account that has no folder of that name contributes no rows and says
 so in `warnings`, rather than being silently absent from the answer.
 
-**Ranking: mentions, then unread reactions, then volume, then recency.** All
+**Ranking: mentions, then unread reactions, then volume, then longest waiting.** All
 three counts come from the dialog list, which Telegram keeps separately —
 `unread` is how busy a chat is, while `mentions` and `reactions` are somebody
 addressing *this account*. A reaction outranks volume deliberately: a 👍 on
 this account's own message is a response to it, where two hundred unread
 messages in a group are not. It ranks below a mention because a mention usually
-needs an answer and a reaction usually does not.
+needs an answer and a reaction usually does not. Ties break towards the
+conversation that has gone untouched longest, not the most recent one — the
+older silence is the more overdue.
 
 `mentions_only` stays strictly about mentions — it does not quietly start
 meaning "and reactions". A row carries all three counts (`unread`, `mentions`,
@@ -735,6 +737,10 @@ So the decision follows this repository's own rules rather than Telegram's:
   payload would also collide with the phone-number rule on the way out and
   arrive as `[redacted:phone]` — accurate about the danger, useless as an
   answer. An address that does not parse yields `null`, never the raw string.
+  It is coarsening, not anonymisation: a network prefix is still a stable
+  pointer at a provider and a locality, which is why it is a *prefix* rather
+  than the address and why `safety.read.sessions` turns the whole operation off
+  rather than trimming further.
 - **Country and region stay whole.** They are coarse by construction, and they
   are the fields that make a rogue session obvious at a glance.
 - **The authorisation hash is not returned at all.** It is the handle the
