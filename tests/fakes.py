@@ -127,6 +127,7 @@ class FakeClient:
         dialogs: list[Any] | None = None,
         messages: list[Any] | None = None,
         drafts: list[Any] | None = None,
+        participants: list[Any] | None = None,
         answers: dict[type, Any] | None = None,
         me: Any = None,
     ) -> None:
@@ -135,6 +136,7 @@ class FakeClient:
         self._dialogs = dialogs or []
         self._messages = messages or []
         self._drafts = drafts or []
+        self._participants = participants or []
         self._answers = answers or {}
         self._me = me
         #: Every request object handed to `__call__`, in order.
@@ -204,6 +206,10 @@ class FakeClient:
                 yield draft
 
         return stream()
+
+    async def get_participants(self, target: Any, **kwargs: Any) -> Any:
+        self.calls.append(("get_participants", target, kwargs))
+        return _Page(self._participants)
 
     # --- raw requests -------------------------------------------------------
 

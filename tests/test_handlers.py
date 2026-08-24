@@ -31,7 +31,12 @@ from telethon.tl.functions.messages import GetPeerDialogsRequest
 import telegram_ai_cli.ops.fleet as fleet_ops
 import telegram_ai_cli.ops.inbox as inbox_ops
 from telegram_ai_cli.errors import InvalidInput, NotAllowlisted
-from telegram_ai_cli.ops.chats import ChatReadInput, handle_chat_read
+from telegram_ai_cli.ops.chats import (
+    ChatMembersInput,
+    ChatReadInput,
+    handle_chat_members,
+    handle_chat_read,
+)
 from telegram_ai_cli.ops.fleet import FleetInput, handle_fleet
 from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
 from telegram_ai_cli.ops.pending import DraftsInput, handle_drafts
@@ -81,6 +86,43 @@ def a_dialog_answer() -> Any:
 
 def readable(chat_id: int) -> dict[str, Any]:
     return {"read": {"chats": {"allow": [chat_id]}}}
+
+
+# --- listing members ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listing_members_without_a_search_still_passes_telegram_a_string(
+    make_context: Any,
+) -> None:
+    """`search=None` reaches Telegram as `ChannelParticipantsSearch.q` and fails there.
+
+    Asserted on the argument rather than on the rows, because the fake will
+    accept anything: the real client puts the value into a TL object whose
+    serializer raises `TypeError: bytes or str expected` on None. A small legacy
+    group takes a different path and never notices, so the bug shows up only on
+    supergroups and channels — which is every chat this listing is useful for.
+    """
+    client = FakeClient(entity=group(), participants=[friend()])
+
+    await handle_chat_members(make_context(client), ChatMembersInput(chat=str(GROUP_ID)))
+
+    call = next(call for call in client.calls if call[0] == "get_participants")
+    assert call[2]["search"] == ""
+
+
+@pytest.mark.asyncio
+async def test_listing_only_admins_passes_a_string_too(make_context: Any) -> None:
+    """The admin filter suppresses the search, and suppressed must not mean None."""
+    client = FakeClient(entity=group(), participants=[friend()])
+
+    await handle_chat_members(
+        make_context(client), ChatMembersInput(chat=str(GROUP_ID), admins_only=True)
+    )
+
+    call = next(call for call in client.calls if call[0] == "get_participants")
+    assert call[2]["search"] == ""
+    assert call[2]["filter"] is not None
 
 
 # --- the refusal comes before the request -----------------------------------

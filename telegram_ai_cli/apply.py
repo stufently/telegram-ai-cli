@@ -128,6 +128,7 @@ _LIMIT_KINDS: dict[str, LimitKind] = {
     # loop nothing stops.
     "chat.archive": LimitKind.ADMIN,
     "chat.mute": LimitKind.ADMIN,
+    "folders.add": LimitKind.ADMIN,
     "account.profile": LimitKind.ADMIN,
     # A chat's identity is an admin act on that chat, and the block list is an
     # admin act on a person; both draw on the budget that bounds how much of
@@ -166,6 +167,10 @@ class _Prepared:
     #: the chat argument is what names the message, and the RPC step must send
     #: the id that was checked rather than re-derive one of its own.
     message_ids: list[int] = field(default_factory=list)
+    #: Which folder a folder plan edits, resolved during verification. Carried
+    #: rather than re-derived: the argument may be a folder *name*, and a name
+    #: can point at a different folder by the time the RPC step runs.
+    folder_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +489,27 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 audit_peer_id=chat.ref.peer_id,
                 audit_body=getattr(params, "text", None),
                 warnings=warnings,
+            )
+
+        case "folders.add":
+            from .ops.folder_write import recheck_folder
+            from .ops.folders import load_folders, resolve_folder
+
+            require_planning_profile(ctx, Capability.SEND, action=action)
+            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+            require_peer(ctx, Capability.SEND, chat.ref, action=action)
+            warnings += _check_peer(pre["peer"], chat, what="chat")
+            view = resolve_folder(
+                await load_folders(client, what=action),
+                str(params.folder),  # type: ignore[attr-defined]
+            )
+            recheck_folder(pre, view, chat.ref.peer_id)
+            return _Prepared(
+                limit_target=str(chat.ref.peer_id),
+                peers={"chat": chat},
+                audit_peer_id=chat.ref.peer_id,
+                warnings=warnings,
+                folder_id=view.id,
             )
 
         case "chat.archive" | "chat.mute":
@@ -1026,6 +1052,23 @@ async def _execute(
                 "send_when_online": bool(params.when_online),  # type: ignore[attr-defined]
                 "scheduled_for": None if at is None else at.isoformat(),
             }, warnings
+
+        case "folders.add":
+            from .ops.folder_write import add_peer_to_filter, raw_filter_for
+
+            peer = await client.get_input_entity(prepared.peers["chat"].ref.peer_id)
+            # Refetched and mutated in place. Telegram replaces the whole filter
+            # on every edit, and this folder may name private chats the read
+            # policy hides — rebuilding one from what this tool can see would
+            # delete them. See the section comment in ops/folders.py.
+            filters = await client(functions.messages.GetDialogFiltersRequest())
+            item = raw_filter_for(filters, prepared.folder_id)
+            changed = add_peer_to_filter(item, peer, prepared.peers["chat"].ref.peer_id)
+            if changed:
+                await client(functions.messages.UpdateDialogFilterRequest(id=item.id, filter=item))
+            else:
+                warnings.append("the chat was already in this folder; nothing was changed")
+            return {"folder_id": prepared.folder_id, "added": changed}, warnings
 
         case "chat.archive":
             from .ops.quiet import folder_id_for

@@ -655,6 +655,7 @@ FOLDERS = REGISTRY.register(
     )
 )
 
+
 #: Re-exported so the two listing operations declare the same argument with the
 #: same words. A folder filter that means one thing in `chats` and another in
 #: `inbox` is the kind of drift the single registry exists to prevent.

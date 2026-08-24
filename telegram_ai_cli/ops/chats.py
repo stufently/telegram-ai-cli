@@ -570,14 +570,19 @@ async def handle_chat_members(ctx: OperationContext, params: ChatMembersInput) -
             raise NotFound("chat.members: a one-to-one conversation has no member list")
         require_peer(ctx, Capability.READ_MEMBERS, ref, action="chat.members")
 
-        kwargs: dict[str, Any] = {"limit": params.limit, "search": params.search}
+        # `search` must be a string, never None. Telethon's own default is "",
+        # and for a supergroup it puts the value straight into
+        # `ChannelParticipantsSearch.q`, which refuses to serialize None — so
+        # `--search` left off would crash on every supergroup and channel while
+        # working fine on a small legacy group, whose listing takes another path.
+        kwargs: dict[str, Any] = {"limit": params.limit, "search": params.search or ""}
         if params.admins_only:
             from telethon.tl.types import ChannelParticipantsAdmins
 
             # `filter` and `search` are mutually exclusive in the API; the
             # admin filter wins, and the search is applied afterwards.
             kwargs["filter"] = ChannelParticipantsAdmins()
-            kwargs["search"] = None
+            kwargs["search"] = ""
 
         with telegram_errors(what="chat.members"):
             participants = await account.client.get_participants(entity, **kwargs)

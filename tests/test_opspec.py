@@ -295,6 +295,26 @@ def test_is_remote_write_matches_the_effect() -> None:
     assert read_op(effect=Effect.LOCAL_WRITE).is_remote_write is False
 
 
+def test_no_cli_path_is_a_prefix_of_another() -> None:
+    """A command whose name another command extends stops being a command.
+
+    Click cannot have `tg-ai folders` be both a command and the group holding
+    `tg-ai folders add`: declaring the second silently replaces the first, and
+    the listing that README documents answers "Usage: … COMMAND" instead. The
+    registry's duplicate-path check does not see this — the two tuples differ —
+    which is how it reached a real account before anyone noticed. Hence the
+    project's convention: `chats` lists, `chat …` acts.
+    """
+    paths = {op.cli for op in REGISTRY.all()}
+    swallowed = sorted(
+        " ".join(path)
+        for path in paths
+        if any(other[: len(path)] == path and len(other) > len(path) for other in paths)
+    )
+
+    assert not swallowed, f"CLI commands shadowed by a group of the same name: {swallowed}"
+
+
 def test_every_operation_module_is_wired_into_the_package() -> None:
     """A module the package never imports has no command and no tool.
 

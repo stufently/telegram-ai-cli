@@ -26,8 +26,9 @@ import pytest
 from telegram_ai_cli.audit import AuditLog
 from telegram_ai_cli.config import Settings
 from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import InvalidInput, NotFound
+from telegram_ai_cli.errors import InvalidInput, NotFound, PlanPreconditionFailed
 from telegram_ai_cli.ops.chats import ChatsInput, handle_chats
+from telegram_ai_cli.ops.folder_write import add_peer_to_filter, raw_filter_for, recheck_folder
 from telegram_ai_cli.ops.folders import (
     DialogFacts,
     FolderFlags,
@@ -131,6 +132,113 @@ class FakeFilterList:
     """``messages.DialogFilters``, the newer envelope around the list."""
 
     filters: list[Any]
+
+
+# --- putting a chat into a folder -------------------------------------------
+#
+# Telegram replaces the whole filter on every edit, so the property under test
+# is not "the peer arrived" but "nothing else left". A folder on a real account
+# names private chats the read policy hides, and a rebuild-from-what-we-can-see
+# would silently drop exactly those.
+
+#: Computed, never written out: the marked form of a channel id is shaped
+#: exactly like a real supergroup id, and the repository's own scan for private
+#: data rejects that literal on sight (tests/test_no_private_data.py).
+NEW_CHANNEL = FakeInputChannel(channel_id=42)
+NEW_CHANNEL_ID = input_peer_id(NEW_CHANNEL)
+
+
+def test_the_filter_that_is_edited_is_the_object_telegram_sent() -> None:
+    """Identity, not equality: a copy could be built from the sanitized view."""
+    wanted = FakeFilter(id=2, title=FakeTitle("постоянные"))
+    result = FakeFilterList(filters=[FakeDefault(), FakeFilter(id=1, title="other"), wanted])
+
+    assert raw_filter_for(result, 2) is wanted
+
+
+def test_a_folder_that_disappeared_between_review_and_apply_is_not_found() -> None:
+    with pytest.raises(NotFound):
+        raw_filter_for(FakeFilterList(filters=[FakeFilter(id=1, title="other")]), 2)
+
+
+def test_adding_a_chat_keeps_every_peer_the_folder_already_named() -> None:
+    """Including the ones this configuration would refuse to name back."""
+    private = FakeInputUser(user_id=777)
+    opaque = FakeInputSelf()
+    item = FakeFilter(id=2, title="постоянные", include_peers=[private, opaque])
+
+    assert add_peer_to_filter(item, NEW_CHANNEL, NEW_CHANNEL_ID) is True
+
+    assert item.include_peers[0] is private
+    assert item.include_peers[1] is opaque
+    assert len(item.include_peers) == 3
+
+
+def test_adding_a_chat_the_folder_already_has_changes_nothing() -> None:
+    item = FakeFilter(id=2, title="постоянные", include_peers=[FakeInputChannel(channel_id=42)])
+
+    assert add_peer_to_filter(item, NEW_CHANNEL, NEW_CHANNEL_ID) is False
+    assert len(item.include_peers) == 1
+
+
+def test_a_chat_the_folder_excludes_is_refused_rather_than_contradicted() -> None:
+    item = FakeFilter(id=2, title="постоянные", exclude_peers=[FakeInputChannel(channel_id=42)])
+
+    with pytest.raises(InvalidInput):
+        add_peer_to_filter(item, NEW_CHANNEL, NEW_CHANNEL_ID)
+
+    assert item.include_peers == []
+
+
+def test_a_folder_that_still_matches_the_plan_passes_verification() -> None:
+    recheck_folder({"folder_id": 2}, folder(id=2), NEW_CHANNEL_ID)
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        pytest.param({"id": 3}, id="the name now points at another folder"),
+        pytest.param({"id": 2, "shareable": True}, id="it became a shareable folder"),
+        pytest.param(
+            {"id": 2, "exclude": frozenset({NEW_CHANNEL_ID})},
+            id="the chat has since been excluded",
+        ),
+    ],
+)
+def test_a_folder_that_drifted_since_review_fails_the_precondition(
+    drift: dict[str, Any],
+) -> None:
+    """Refused in verification, not in the applier.
+
+    All three are things a person does in Telegram between review and apply. A
+    refusal raised later has already reserved a rate-limit slot and written an
+    audit *attempt* for something that never happened.
+    """
+    with pytest.raises(PlanPreconditionFailed):
+        recheck_folder({"folder_id": 2}, folder(**drift), NEW_CHANNEL_ID)
+
+
+def test_a_chat_only_pinned_in_the_folder_is_already_in_it() -> None:
+    """Otherwise the plan says "nothing changes" and the applier appends a duplicate."""
+    item = FakeFilter(id=2, title="постоянные", pinned_peers=[FakeInputChannel(channel_id=42)])
+
+    assert add_peer_to_filter(item, NEW_CHANNEL, NEW_CHANNEL_ID) is False
+    assert item.include_peers == []
+
+
+def test_a_shareable_folder_is_refused_because_its_members_follow_a_link() -> None:
+    """`DialogFilterChatlist` *has* an `include_peers`; what it lacks is the flags.
+
+    Recognising it by a missing peer list would be a guard that never fires on
+    the real type — the shape that reaches this function in production.
+    """
+    item = FakeChatlist(id=9, title="shared")
+    assert hasattr(item, "include_peers")
+
+    with pytest.raises(InvalidInput):
+        add_peer_to_filter(item, NEW_CHANNEL, NEW_CHANNEL_ID)
+
+    assert item.include_peers == []
 
 
 # --- parsing ----------------------------------------------------------------

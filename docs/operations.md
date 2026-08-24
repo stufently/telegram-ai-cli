@@ -1124,7 +1124,7 @@ would act on the lie.
 
 ## Plan operations
 
-Thirty. Each one **validates and records an intention and returns a `plan_id`**;
+Each one **validates and records an intention and returns a `plan_id`**;
 nothing reaches Telegram until a person runs `tg-ai plan apply <id>`. Over MCP
 they are `telegram_plan_*` tools. There is no tool that applies a plan — see
 [Safety](../README.md#safety) for what that does and does not promise.
@@ -1144,6 +1144,7 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | `chat.mark_read` | `tg-ai chat mark-read` | `telegram_plan_mark_read` | `send` | `chat`\*, `max_message_id` |
 | `chat.archive` | `tg-ai chat archive` | `telegram_plan_archive_chat` | `send` | `chat`\*, `archived`=true |
 | `chat.mute` | `tg-ai chat mute` | `telegram_plan_mute_chat` | `send` | `chat`\*, `muted`=true, `duration_seconds` (60…31536000, omit for indefinite) |
+| `folders.add` | `tg-ai folder add` | `telegram_plan_folder_add` | `send` | `folder` (id or name), `chat`\* |
 | `message.react` | `tg-ai message react` | `telegram_plan_react_message` | `send` | `chat`\*, `message_id`, `emoji` **or** `custom_emoji_id`, `keep_existing`=false, `big`=false |
 | `message.unreact` | `tg-ai message unreact` | `telegram_plan_unreact_message` | `send` | `chat`\*, `message_id`, `emoji` **or** `custom_emoji_id` (neither = all of them) |
 | `message.pin` | `tg-ai message pin` | `telegram_plan_pin_message` | `admin` | `chat`\*, `message_id`, `silent`=false, `both_sides`=false |
@@ -1301,6 +1302,16 @@ Notes that are not obvious from the table:
   had been read. Once applied, a timed message waits in Telegram's own scheduled
   queue, visible in the app and cancellable there; cancelling it from here is not
   possible, see [`TASKS.md`](../TASKS.md).
+- **`folders.add` edits a folder without rebuilding it.** Telegram has no call that
+  adds one chat: `UpdateDialogFilter` replaces the whole folder, so the edit has to
+  send back everything already in it — and a folder on a real account names private
+  chats the read policy hides and `folders` does not print. Rebuilding one from the
+  visible listing would delete precisely those, and the loss would show up in neither
+  the plan nor the result. So the applier mutates the raw filter Telegram just sent
+  and hands the same object back: what it cannot see, it cannot drop. The folder is
+  re-resolved at apply time and refused if its id, its shareability or the chat's
+  exclusion changed since review. Shareable folders are refused outright — their
+  membership follows an invite link, not a list.
 - **`chat.archive` and `chat.mute` change nothing anybody else can see.** They move a
   chat in this account's own list and silence notifications on this account's own
   devices; the other side is not blocked, left or banned, still receives everything,

@@ -45,6 +45,7 @@ A good hand-off names the plan and the command, in that order:
 | invite somebody | `telegram_plan_invite_user` |
 | moderate | `telegram_plan_ban_user`, `telegram_plan_unban_user`, `telegram_plan_kick_user`, `telegram_plan_restrict_user`, `telegram_plan_promote_admin`, `telegram_plan_demote_admin` |
 | mute or archive a chat | `telegram_plan_mute_chat`, `telegram_plan_archive_chat` |
+| put a chat into a folder | `telegram_plan_folder_add` |
 | mark a chat read | `telegram_plan_mark_read` |
 | rename / describe / re-photograph a chat | `telegram_plan_set_chat_title`, `telegram_plan_set_chat_about`, `telegram_plan_set_chat_photo` |
 | block or unblock a person | `telegram_plan_block_user`, `telegram_plan_unblock_user` |

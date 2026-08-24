@@ -9,6 +9,28 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- **`tg-ai folder add` — put a chat into one of the account's chat folders**,
+  planned and applied like every other write (`telegram_plan_folder_add`).
+  Telegram has no call that adds one chat: `UpdateDialogFilter` replaces the
+  whole folder, so an edit must send back everything already in it — and a
+  folder on a real account names private chats the read policy hides and
+  `folders` therefore does not print. Rebuilding the folder from the visible
+  listing would have deleted precisely those, invisibly, in both the plan and
+  the result. The applier never rebuilds: it mutates the raw filter object
+  Telegram just sent and hands the same object back, so what it cannot see it
+  cannot drop. A test pins that by object identity rather than equality.
+  Shareable folders, whose membership follows an invite link, are refused. Lives
+  in its own module (`ops/folder_write.py`) because `chats` imports `folders`
+  and the write helpers import `chats`.
+
+- A registry invariant that **no CLI path is a prefix of another**. Click cannot
+  have `tg-ai folders` be both a command and the group holding `folders add`:
+  declaring the second silently replaces the first, and the documented listing
+  starts answering `Usage: … COMMAND`. The existing duplicate-path check does not
+  see this, because the two tuples differ — it reached a live account before it
+  was noticed. The project's convention is now enforced rather than remembered:
+  `chats` lists, `chat …` acts.
+
 - Channel identity summaries now expose `linked_monoforum_id` when Telegram
   Direct Messages are enabled. The value is converted to the same marked chat
   id accepted by every read and plan operation, so `tg-ai whois` can discover
@@ -1012,6 +1034,16 @@ before that, breaking changes can happen on any `0.x` release.
   told what the delimiters mean instead of inferring it.
 
 ### Fixed
+
+- **`chat members` no longer crashes on a supergroup.** Without `--search` the
+  handler passed Telethon `search=None`, which for a channel or supergroup goes
+  straight into `ChannelParticipantsSearch.q` and dies in the serializer with
+  `TypeError: bytes or str expected` — an unhandled traceback rather than an
+  error envelope. A small legacy group lists its members another way and never
+  noticed, which is why this survived: it broke exactly the chats the listing is
+  useful for. The operation had no tests at all; it has them now, asserting on
+  the argument handed to Telethon rather than on the rows, because the fake
+  accepts anything the real client rejects.
 
 - **`chat topics` exists again.** `ops/topics.py` was complete, documented in
   the README and in `docs/operations.md`, referenced by another operation's
