@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "telegram": {
+      "command": "tg-ai",
+      "args": ["mcp"]
+    }
+  }
+}

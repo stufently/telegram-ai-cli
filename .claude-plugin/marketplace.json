@@ -1,0 +1,27 @@
+{
+  "name": "stufently-telegram",
+  "description": "Telegram user account as an MCP server: reads that acknowledge nothing, and writes that stop at a plan",
+  "owner": {
+    "name": "stufently",
+    "url": "https://github.com/stufently"
+  },
+  "plugins": [
+    {
+      "name": "telegram-ai-cli",
+      "source": "./",
+      "description": "Read and act on a Telegram user account over MTProto: 20 immediate tools, and every write prepared as a plan a human applies from a terminal — chat allowlists, a hard denylist and an audit log underneath. Requires the `tg-ai` command on PATH.",
+      "license": "MIT",
+      "homepage": "https://github.com/stufently/telegram-ai-cli",
+      "repository": "https://github.com/stufently/telegram-ai-cli",
+      "keywords": [
+        "telegram",
+        "mtproto",
+        "telethon",
+        "userbot",
+        "mcp",
+        "automation"
+      ],
+      "category": "productivity"
+    }
+  ]
+}

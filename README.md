@@ -195,6 +195,24 @@ Add the `plan` profile if you want it to be able to prepare plans (nothing is ev
 claude mcp add telegram --env TGAI_PROFILE=plan -- tg-ai mcp
 ```
 
+#### Or as a plugin
+
+The repository is also a Claude Code plugin: the same server, plus two skills —
+one for catching up on an account, one for the plan-and-apply boundary, which is
+the part an agent otherwise has to discover by looking for a send tool and not
+finding one.
+
+```bash
+claude plugin marketplace add stufently/telegram-ai-cli
+claude plugin install telegram-ai-cli@stufently-telegram
+```
+
+The plugin supplies the server definition and the skills; it does not install
+the program. `tg-ai` still has to be on `PATH` — until the first PyPI release
+that means `pipx install git+https://github.com/stufently/telegram-ai-cli`, or
+this repo checked out and installed — and the account still has to be signed in
+with `tg-ai account login`, because a plugin cannot prompt for a login code.
+
 ### Claude Desktop
 
 `claude_desktop_config.json`:

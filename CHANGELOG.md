@@ -9,6 +9,29 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- **The repository is a Claude Code plugin.** `.claude-plugin/plugin.json`,
+  `.claude-plugin/marketplace.json` and `plugin.mcp.json`, in the same shape as
+  `yandex-mcp`, so `claude plugin marketplace add stufently/telegram-ai-cli`
+  installs the server definition. It does not install the program: `tg-ai` still
+  has to be on `PATH` and the account still has to be signed in from a terminal,
+  because a plugin cannot prompt for a login code. The marketplace is named
+  `stufently-telegram`, not `stufently`: a marketplace name is global to the
+  machine and `yandex-mcp` already publishes one under that name, so the second
+  would have replaced the first. The plugin version is a pre-release
+  (`0.1.0-dev.0`) for a related reason — an installed plugin only refreshes when
+  that string changes, so shipping `0.1.0` before the release would make the
+  real `0.1.0` invisible to everyone who installed early.
+
+- **Two skills**, in `.claude/skills/`. `telegram-triage` is for reading an
+  account — where to start, why one page is not a period, and what an absent
+  chat usually means. `telegram-write-by-plan` is for the part an agent
+  otherwise discovers the hard way: there is no tool that sends, every write
+  returns a plan id, and a person applies it with `tg-ai plan apply`. Both are
+  checked by `tests/test_plugin_manifest.py` against the registry — every tool
+  name a skill mentions must exist, the write skill must name every plan tool,
+  and no skill may promise an apply tool. Prose does not fail to compile, and a
+  skill naming a renamed tool fails inside somebody's Telegram account instead.
+
 - `tg-ai media transcribe` / `telegram_media_transcribe` — turn one voice message
   or audio file into text, **locally**. Whisper (model `small`) runs in a
   *separate, optional* Docker image built by `make transcribe-image`; the main

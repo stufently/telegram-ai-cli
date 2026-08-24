@@ -7,11 +7,12 @@ is
 
 ## Distribution surface (Claude Code plugin, skills)
 
-- [ ] `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
-      `plugin.mcp.json` — so the repo can be added as a Claude Code plugin the
-      way `yandex-mcp` and `zabbix-ai-cli` are.
-- [ ] `.claude/skills/<skill>/SKILL.md` — at least one Claude Code skill now
-      that the tool surface is stable enough to write one against.
+- [ ] **The plugin is not installable until the package is.** The manifests
+      launch `tg-ai`, which means the plugin is useful only where the program is
+      already installed — and it is not on PyPI yet (see "For the owner, on
+      GitHub" below). A `uvx telegram-ai-cli tg-ai mcp` form would need no prior
+      install, but it would fetch from an index that has nothing in it, so it
+      waits on the first release rather than being written now.
 
 ## Known gaps
 
