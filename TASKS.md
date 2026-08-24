@@ -5,6 +5,20 @@ shipped is in [`CHANGELOG.md`](CHANGELOG.md); the design these items implement
 is
 [`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md).
 
+## Where this stands
+
+Everything below is open work; everything shipped is described in the changelog,
+entry by entry, and the design document is the picture the whole thing is built
+against. Nothing is half-applied: `main` is green, and each entry in the
+changelog corresponds to a commit that passed CI on its own.
+
+The invariants worth knowing before changing anything — no MCP tool applies a
+plan, a hard denylist that no configuration can open, DMs allowlist-only,
+enumeration is not reading — are each asserted by a test rather than left as a
+convention, so a change that breaks one fails rather than shipping. Run them
+with `make test` and `make lint` (both take `TEST_IMAGE=` to reuse a built
+image); everything runs in Docker and nothing is installed on the host.
+
 ## Distribution surface (Claude Code plugin, skills)
 
 - [ ] **The plugin is not installable until the package is.** The manifests
@@ -148,6 +162,21 @@ is
       either means re-reading a range already stored and diffing it, which is
       the cost the watermark exists to avoid. Worth doing only as an explicit
       `archive resync --chat` that a person asks for.
+
+- [ ] **A channel's "chat with the administration" is reachable only by an id
+      found elsewhere.** That chat is a *monoforum* — Telegram's Direct Messages
+      to channels — and its id lives in `Channel.linked_monoforum_id` on the
+      channel object rather than in its full info. Telethon 1.44 carries the
+      field and `InputReplyToMonoForum` with it; nothing here reads either.
+      `contacts.whois` answers identity only, and the one `GetFullChannel` in
+      `ops/settings.py` is there for the description, so finding the id today
+      means doing it by hand. Writing *into* one already works — to this code it
+      is a channel like any other, resolved by id — but the other direction does
+      not: replying inside one's own monoforum addresses a per-user topic through
+      `InputReplyToMonoForum`, which no plan operation can express. Two separate
+      pieces of work, and the first is the useful one on its own: surface the id
+      on a read, then decide whether the topic becomes an argument or is derived
+      from a link. Asked by the owner, 2026-08-24.
 
 - [ ] **A folder narrows only the two dialog listings.** `chats.list` and
       `inbox.list` take `folder`; `search`, `mentions` and `drafts` walk chats
