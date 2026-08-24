@@ -28,9 +28,11 @@ from telethon import utils
 from telethon.tl import types as tl
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 
+import telegram_ai_cli.ops.fleet as fleet_ops
 import telegram_ai_cli.ops.inbox as inbox_ops
 from telegram_ai_cli.errors import InvalidInput, NotAllowlisted
 from telegram_ai_cli.ops.chats import ChatReadInput, handle_chat_read
+from telegram_ai_cli.ops.fleet import FleetInput, handle_fleet
 from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
 from telegram_ai_cli.ops.pending import DraftsInput, handle_drafts
 
@@ -295,6 +297,69 @@ async def test_the_inbox_counts_an_unreadable_chat_without_quoting_it(
     assert rows[FRIEND_ID]["preview"] is None
     assert "door code" not in str(envelope.data)
     assert any("1 preview(s) withheld" in one for one in envelope.warnings)
+
+
+@pytest.mark.asyncio
+async def test_fleet_counts_do_not_report_an_unchecked_account_as_signed_out(
+    make_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown flag must not be summed as a zero.
+
+    The row is deliberately tri-state: `null` means nothing checked, which is
+    not the same claim as `false`. Without `probe` nothing checks `authorized`
+    at all, and no code path has ever set `locked` — so counting truthiness
+    turned "nobody looked" into "0 of 1 accounts are signed in", which reads as
+    a fleet that is down. The unknowns are counted on their own instead.
+    """
+    from types import SimpleNamespace
+
+    ctx = make_context(FakeClient())
+    account = SimpleNamespace(label="work", status="ok", has_proxy=False, proxy="<none>")
+    monkeypatch.setattr(fleet_ops, "list_accounts", lambda _ctx: [account])
+
+    envelope = await handle_fleet(ctx, FleetInput())
+
+    counts = envelope.data["counts"]
+    assert counts["registered"] == 1
+    assert counts["authorized"] == 0
+    assert counts["authorized_unknown"] == 1
+    assert counts["locked"] == 0
+    assert counts["locked_unknown"] == 1
+    # And the display placeholder must not be mistaken for a configured proxy.
+    assert envelope.data["accounts"][0]["proxy"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_fleet_probe_does_not_claim_the_account_is_signed_out(
+    make_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`authorized: false` is a claim about the account, not about the attempt.
+
+    A held session lock — the daemon has it, or another command is mid-flight —
+    says nothing about whether the account is signed in. Reporting `false` sends
+    an operator hunting a login that was never missing. Only a session Telegram
+    itself rejected earns the false; everything else stays unknown, with the
+    reason on the row.
+    """
+    from telegram_ai_cli.errors import SessionLocked, SessionRevoked
+
+    ctx = make_context(FakeClient())
+
+    for raised, expected in ((SessionLocked("in use"), None), (SessionRevoked("gone"), False)):
+        row: dict[str, Any] = {"label": "work", "authorized": None, "user_id": None}
+        warnings: list[str] = []
+
+        def explode(_ctx: Any, _label: str, exc: Any = raised):
+            raise exc
+
+        monkeypatch.setattr(fleet_ops, "open_account", explode)
+        await fleet_ops._probe(ctx, row, warnings)
+
+        assert row["probe"] == "failed"
+        assert row["authorized"] is expected
+        # The reason survives either way: unknown must not also mean unexplained.
+        assert "work" in warnings[0]
+        assert type(raised).__name__ in row["last_error"]
 
 
 @pytest.mark.asyncio

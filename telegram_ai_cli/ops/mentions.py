@@ -419,7 +419,11 @@ async def handle_mentions(ctx: OperationContext, params: MentionsInput) -> Envel
             # there are no mentions, rather than that nobody looked.
             if params.account is not None:
                 raise
-            warnings.append(f"{label}: {type(exc).__name__}")
+            # The message, not just the class, exactly as `inbox` does it: a
+            # bare "FloodWait" drops the one number the caller needs — how long
+            # Telegram asked us to wait — and leaves retrying to guesswork.
+            detail = getattr(exc, "message", None)
+            warnings.append(f"{label}: {detail or type(exc).__name__}")
             continue
         rows.extend(sweep.rows)
         found += sweep.found

@@ -30,7 +30,8 @@
   `⟦untrusted⟧ … ⟦/untrusted⟧`, and the delimiter characters are replaced with
   ASCII lookalikes inside wrapped content so a sender cannot forge or close the
   wrapper. Not configurable.
-- Status as of 2026-08: pre-alpha, under active development. Not published to
+- Status as of 2026-08: v0.1 release candidate, the same wording the README
+  carries. The repository-side implementation is complete. Not published to
   PyPI or an MCP registry. The PyPI pipeline exists (a `v*` tag publishes over
   Trusted Publishing) and waits on a one-time registration the repository owner
   makes deliberately, because a package name in a public registry is claimed

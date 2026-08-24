@@ -1013,6 +1013,46 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **`chat topics` exists again.** `ops/topics.py` was complete, documented in
+  the README and in `docs/operations.md`, referenced by another operation's
+  error text — and never imported by `ops/__init__`, which is the only thing
+  that registers an operation. So `tg-ai chat topics` answered "No such
+  command" and the MCP server published 50 tools instead of 51. The suite
+  stayed green throughout because `tests/test_forum_topics.py` imports the
+  module directly, which registers the operation as a side effect: the tests
+  exercised a handler no surface could reach. A new check in
+  `tests/test_opspec.py` compares the `ops/` directory against `ops.__all__`
+  rather than against anything already imported, so the next unwired module
+  fails at once. Found by running the documented command on a live account.
+- **`fleet` no longer reports every account as proxied.** The row was built
+  from `account.proxy`, the *display* string, whose no-proxy value is the
+  placeholder `<none>` rather than an empty one — so `bool()` on it was always
+  true, including for accounts the very same run warns about for having no
+  proxy. It reads `has_proxy` now.
+- **`fleet` no longer counts "nobody looked" as "signed out".** The row keeps
+  `authorized` and `locked` tri-state on purpose — `null` means nothing checked
+  — but the summary summed truthiness, which flattened that to zero. Since
+  nothing sets `authorized` without `probe`, and no path has ever set `locked`,
+  a healthy fleet reported `authorized: 0, locked: 0`. The counters now count
+  only what is known, beside `authorized_unknown` and `locked_unknown`. A
+  failed `--probe` no longer answers `authorized: false` either: a held session
+  lock, a flood wait or a dead proxy is a fact about the attempt, not about the
+  account, and it sent an operator looking for a login that was never missing.
+  Only `AuthRequired` and `SessionRevoked` — a session Telegram itself
+  rejected — still report false; every other failure stays unknown with the
+  reason on the row.
+- **`mentions` keeps the reason an account failed.** Its per-account warning
+  was the exception's class name alone, which turned a flood wait into a bare
+  `FloodWait` with the one number a caller needs — how long Telegram asked us
+  to wait — thrown away. It now carries the message, as `inbox` already did.
+- **The MCP handshake reports a version.** `Server(...)` was constructed
+  without one, so `serverInfo.version` was an empty string and a client had no
+  way to see which build answered it.
+- **`daemon serve` says so when no client will route to it.** The command runs
+  regardless of `daemon.enabled`, holds the account's auth key, and — with the
+  setting off — is ignored by every client, so each other command fails with
+  `SESSION_LOCKED`: the exact opposite of what the daemon is for. It warns now
+  rather than refusing, since the setting is legitimately supplied per call.
 - **A first login now holds the same session lock before and after Telethon
   creates the `.session` file.** Every auth key always takes its canonical-path
   lock and, once present, its inode lock as well. The stable lock closes the

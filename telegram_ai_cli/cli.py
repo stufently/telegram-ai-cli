@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any, get_args, get_origin
@@ -497,6 +498,22 @@ def daemon_serve(ctx: click.Context, account: str, idle_timeout: float | None) -
     from .daemon.service import RegistrySession
 
     settings = load_settings(ctx.obj["config"])
+    if not settings.daemon.enabled:
+        # Serving without `daemon.enabled` is worse than pointless: this process
+        # holds the auth key, and no client routes to it, so every other command
+        # gets SESSION_LOCKED instead of the shared connection the daemon exists
+        # to provide. Warned rather than refused — the setting is legitimately
+        # supplied per call through TGAI_DAEMON__ENABLED.
+        logging.getLogger(__name__).warning(
+            "daemon.enabled is off, so no client will route to this daemon: it "
+            "will hold %s's session and other commands will fail with "
+            "SESSION_LOCKED. Set daemon.enabled (or TGAI_DAEMON__ENABLED=true) "
+            "for the callers too.",
+            # Sanitised: the label reaches the terminal before anything has
+            # normalised it, and control characters in a log line can forge the
+            # rest of the warning.
+            sanitize_line(account),
+        )
     try:
         daemon_paths.prepare_account_dir(settings, account)
         daemon = AccountDaemon(

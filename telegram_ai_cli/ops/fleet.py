@@ -20,6 +20,7 @@ from pydantic import Field
 
 from ..context import OperationContext
 from ..envelope import Envelope
+from ..errors import AuthRequired, SessionRevoked
 from ..opspec import REGISTRY, Effect, Operation
 from ._client import label_of, list_accounts, open_account
 from ._common import ReadInput, telegram_errors, telegram_result
@@ -79,7 +80,11 @@ def _describe(ctx: OperationContext, account: Any) -> dict[str, Any]:
         "allowed": ctx.safety.account_allowed(label),
         "user_id": getattr(account, "user_id", None),
         "username": getattr(account, "username", None),
-        "proxy": bool(getattr(account, "proxy", None)),
+        # ``has_proxy``, not ``proxy``: the latter is the *display* string, and
+        # its no-proxy value is the placeholder "<none>" rather than empty — so
+        # bool() on it reported every account as proxied, including the ones the
+        # same run warns about for having no proxy at all.
+        "proxy": bool(getattr(account, "has_proxy", False)),
         "last_error": getattr(account, "last_error", None),
     }
 
@@ -102,7 +107,12 @@ async def _probe(ctx: OperationContext, row: dict[str, Any], warnings: list[str]
             row["probe"] = "ok"
     except Exception as exc:  # noqa: BLE001 - reported per account, never fatal
         row["probe"] = "failed"
-        row["authorized"] = False
+        # `False` is a claim about the account; most failures here are claims
+        # about the attempt. A held session lock, a flood wait or a dead proxy
+        # says nothing about whether the account is signed in, and answering
+        # "authorized: false" sends an operator looking for a login that is not
+        # missing. Only a session Telegram itself rejected earns the false.
+        row["authorized"] = False if isinstance(exc, (AuthRequired, SessionRevoked)) else None
         row["last_error"] = f"{type(exc).__name__}: {exc}"
         warnings.append(f"{label}: {type(exc).__name__}")
 
@@ -131,11 +141,19 @@ async def handle_fleet(ctx: OperationContext, params: FleetInput) -> Envelope:
             if row["allowed"]:
                 await _probe(ctx, row, warnings)
 
+    # `authorized` and `locked` are tri-state on the row — `_flag` returns None
+    # for "nothing checked" precisely so an operator is not told an account is
+    # signed out when nobody asked. Summing them flattens that None to zero and
+    # puts the lie back: without `probe` nothing sets `authorized`, and `locked`
+    # is never set at all, so both counters read a healthy fleet as "0 of N".
+    # The unknowns are therefore counted separately rather than absorbed.
     counts = {
         "registered": total,
         "usable": sum(1 for row in rows if row["allowed"]),
-        "authorized": sum(1 for row in rows if row["authorized"]),
-        "locked": sum(1 for row in rows if row["locked"]),
+        "authorized": sum(1 for row in rows if row["authorized"] is True),
+        "authorized_unknown": sum(1 for row in rows if row["authorized"] is None),
+        "locked": sum(1 for row in rows if row["locked"] is True),
+        "locked_unknown": sum(1 for row in rows if row["locked"] is None),
     }
 
     return telegram_result(

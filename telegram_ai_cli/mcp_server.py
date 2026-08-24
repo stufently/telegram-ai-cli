@@ -49,6 +49,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
 from mcp.server.stdio import stdio_server
 
+from . import __version__ as PACKAGE_VERSION
 from . import dispatch
 from .config import Settings, load_settings
 from .envelope import Envelope
@@ -281,6 +282,9 @@ def build_server(*, config_path: Path | None = None) -> Server:
 
     return Server(
         SERVER_NAME,
+        # Without this the handshake answers `serverInfo.version: ""`, and the
+        # one place a client can see which build it is talking to says nothing.
+        version=PACKAGE_VERSION,
         instructions=INSTRUCTIONS,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,

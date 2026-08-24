@@ -34,8 +34,18 @@ authority and cannot be completed by changing this checkout.
 
 ## Optional live acceptance
 
+A first live pass ran on 2026-08-24 against one authorised account: every read
+operation, media download, local archive, the daemon, both MCP transports, and
+one `message.send` through plan → apply → duplicate refusal. It is what found
+the unregistered `chat topics`, the always-true `proxy` flag, the always-zero
+fleet counters, the message-less flood-wait warning and the empty
+`serverInfo.version` — all fixed in `CHANGELOG.md` under Unreleased. What it
+could not cover needs more than one account or a chat of a kind that account
+does not have:
+
 - [ ] With test Telegram accounts, run one protected-content forward and confirm
       Telegram's live `CHAT_FORWARDS_RESTRICTED` response maps to
       `FORWARDS_RESTRICTED` as the deterministic unit test specifies.
 - [ ] With a real forum, page `chat topics` using the returned three-part cursor
-      and page scoped `mentions` with its returned offsets.
+      and page scoped `mentions` with its returned offsets. The command exists
+      again as of the fix above; only its paging is still unexercised live.

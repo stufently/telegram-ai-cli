@@ -293,3 +293,49 @@ def test_is_remote_write_matches_the_effect() -> None:
     assert write_op().is_remote_write is True
     assert read_op().is_remote_write is False
     assert read_op(effect=Effect.LOCAL_WRITE).is_remote_write is False
+
+
+def test_every_operation_module_is_wired_into_the_package() -> None:
+    """A module the package never imports has no command and no tool.
+
+    ``ops/__init__`` lists its modules by hand, on purpose, and that list is the
+    only thing that registers them. Nothing else notices when a module is left
+    out: its own tests import it directly, which both exercises the handler and
+    registers the operation as a side effect, so the suite stays green while the
+    command does not exist. ``ops/topics.py`` shipped that way — complete, tested
+    and unreachable, with ``tg-ai chat topics`` answering "No such command" and
+    the README documenting it anyway. Hence a check against the directory rather
+    than against anything a test has already imported.
+    """
+    import ast
+    from pathlib import Path
+
+    import telegram_ai_cli.ops as ops_package
+
+    directory = Path(ops_package.__file__).parent
+    on_disk = {
+        path.stem
+        for path in directory.glob("*.py")
+        if not path.stem.startswith("_")  # private helpers carry no operations
+    }
+
+    # Read the import statement itself rather than `__all__` or `sys.modules`.
+    # `__all__` is documentation and can list a module the import block does not
+    # actually pull in; `sys.modules` is worse, because any other test that
+    # imported the module directly has already put it there — which is the very
+    # blindness this check exists to remove.
+    source = ast.parse((directory / "__init__.py").read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(source)
+        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module is None
+        for alias in node.names
+    }
+
+    assert on_disk <= imported, (
+        f"operation modules not imported by ops/__init__: {sorted(on_disk - imported)}"
+    )
+    assert on_disk == set(ops_package.__all__) - {"REGISTRY"}, (
+        "ops.__all__ has drifted from the modules on disk: "
+        f"{sorted(set(ops_package.__all__) - {'REGISTRY'} ^ on_disk)}"
+    )

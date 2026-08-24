@@ -9,7 +9,7 @@
     {
       "name": "telegram-ai-cli",
       "source": "./",
-      "description": "Read and act on a Telegram user account over MTProto: 20 immediate tools, and every write prepared as a plan a human applies from a terminal — chat allowlists, a hard denylist and an audit log underneath. Requires the `tg-ai` command on PATH.",
+      "description": "Read and act on a Telegram user account over MTProto: 21 immediate tools, and every write prepared as a plan a human applies from a terminal — chat allowlists, a hard denylist and an audit log underneath. Requires the `tg-ai` command on PATH.",
       "license": "MIT",
       "homepage": "https://github.com/stufently/telegram-ai-cli",
       "repository": "https://github.com/stufently/telegram-ai-cli",

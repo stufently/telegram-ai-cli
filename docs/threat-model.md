@@ -63,7 +63,9 @@ handled.
 - **A compromised or malicious MCP client with no shell.** A client that
   speaks MCP but cannot run arbitrary commands on the host — most IDE
   integrations, Claude Desktop as shipped. Its ceiling is exactly the MCP tool
-  surface: nine read tools and twelve plan tools, no apply tool. See
+  surface: the read tools and the plan tools, and no apply tool. The count is
+  deliberately not repeated here — it moves, and a stale number in a threat
+  model reads as a smaller blast radius than the one that ships. See
   [MCP tools in the README](../README.md#mcp-tools).
 - **An AI agent that *does* have shell access** (Claude Code, Codex, and
   comparable coding agents), whether acting on the owner's genuine intent or
