@@ -9,6 +9,11 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Added
 
+- Channel identity summaries now expose `linked_monoforum_id` when Telegram
+  Direct Messages are enabled. The value is converted to the same marked chat
+  id accepted by every read and plan operation, so `tg-ai whois` can discover
+  the administration inbox without a raw Telethon lookup.
+
 - **The repository is a Claude Code plugin.** `.claude-plugin/plugin.json`,
   `.claude-plugin/marketplace.json` and `plugin.mcp.json`, in the same shape as
   `yandex-mcp`, so `claude plugin marketplace add stufently/telegram-ai-cli`
@@ -60,8 +65,8 @@ before that, breaking changes can happen on any `0.x` release.
   injection does not have to be written: somebody can say "ignore your
   instructions" out loud, and it arrives as a JSON string indistinguishable from
   one this project wrote. Nothing the transcription container prints reaches the
-  caller in an error message either — `Envelope.failure` has no trust boundary
-  around it, so container output goes to the audit log instead.
+  caller in an error message either. Failure payloads are redacted and defanged,
+  but arbitrary container output still belongs only in the audit log.
 - `TRANSCRIBER_UNAVAILABLE` and `TRANSCRIPTION_FAILED` error codes. The first is
   not retryable and carries the command that fixes it, because "transcription is
   unavailable" with no next step is how an optional feature becomes an
@@ -95,8 +100,8 @@ before that, breaking changes can happen on any `0.x` release.
   a plan approved against one title cannot overwrite another. `set_about` spends
   an extra request fetching the description no entity carries, rather than
   showing an empty "current" it never checked; a change that would alter nothing
-  is refused, and the refusal names the chat by id because an error envelope is
-  outside the wrapper that marks stranger-written text as data.
+  is refused, and the refusal names the chat by id so a stranger-written title
+  is never presented as project-authored diagnostic prose.
 - `tg-ai chat set-photo` / `telegram_plan_set_chat_photo` — replace a chat's photo
   with an image from the outbox. The file is chosen by `outbox.resolve_outbound`,
   the same rule `message send-file` uses rather than a second copy of it: two
@@ -262,8 +267,8 @@ before that, breaking changes can happen on any `0.x` release.
   because it decides whether a phone chimes, not what the message says. **Refused, not skipped**: a caller that cannot
   tell "sent" from "quietly didn't" reports success for a message nobody
   received, so the error (`DUPLICATE_OUTBOUND`) names when the identical action
-  was applied and which plan did it, and names the chat by numeric id because
-  `Envelope.failure` does not defang a chat title. The check sits after
+  was applied and which plan did it, and names the chat by numeric id so a
+  stranger-written title is never presented as project prose. The check sits after
   verification and before the rate-limit reservation — it needs the re-resolved
   peer and the re-digested file, and a refusal that never reached Telegram must
   not spend a slot. The row is written beside the audit attempt, before the RPC,
@@ -793,9 +798,8 @@ before that, breaking changes can happen on any `0.x` release.
   which topic it came from. A topic page still reports the *chat's* read
   pointers, since a forum has one dialog for all its topics; that too is said
   in a warning rather than left to be misread. All of these refusals name the
-  chat by id and never by its title — an error is assembled outside
-  `telegram_result`, and `Envelope.failure` neither wraps nor defangs, so a
-  quoted title would leave as unmarked stranger-written text.
+  chat by id and never by its title, so a stranger-written value is not folded
+  into a sentence this project presents as its own.
 - `topic_id` on serialized messages, so a forum message says which topic it is in.
 - Project scaffolding: MIT license, `pyproject.toml` targeting Python 3.12+ with
   dependency floors (`telethon>=1.44,<2`, `click>=8.2,<9`, `pydantic>=2.11,<3`,
@@ -966,6 +970,18 @@ before that, breaking changes can happen on any `0.x` release.
   fingerprints a reply by the id verification settled on, so the same reply
   addressed both ways is still recognised as the same reply.
 
+- `message.forward` now accepts the same one-message link in `source_chat`.
+  Source read policy and destination send policy remain separate, the link's id
+  is re-derived during apply, and the settled id is used for both the RPC and
+  duplicate fingerprint.
+- `mentions.list` can target one `chat` without enumerating every dialog, page
+  older unread entries with `offset_id`, and filter a forum `topic_id` (also
+  derived from a topic-shaped link). Scoped responses return independent next
+  offsets for mentions and reactions.
+- `chat.topics` now accepts and returns Telegram's atomic three-part cursor
+  (`offset_date`, `offset_id`, `offset_topic`) instead of stopping after its
+  first page.
+
 - **The README no longer claims this tool handles `noforwards`.** It did not, and
   nothing in the repository ever implemented it — the line described a capability
   that existed only in the documentation. What is true is now written down in
@@ -997,6 +1013,44 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **A first login now holds the same session lock before and after Telethon
+  creates the `.session` file.** Every auth key always takes its canonical-path
+  lock and, once present, its inode lock as well. The stable lock closes the
+  creation transition that previously let a second client connect unopposed;
+  the inode lock preserves collision detection across hard links. All loader,
+  login, replacement and registry paths acquire the pair through one guard.
+- **Phone login no longer writes an unverified number over an authorised
+  session.** A known session refuses a different `--phone` before its account
+  row changes, and the result uses the identity returned by `get_me` rather
+  than blindly echoing the argument.
+- **Replacing a login is transactional from the operator's perspective.** An
+  existing account row and every session/API file the attempt may mutate are
+  snapshotted under the account lock and restored on any failure. New accounts
+  still retain a visible `auth_failed` row, while a failed `--replace` no longer
+  destroys a working registration.
+- A QR login remembers the registered `user_id`. If a different account scans
+  without an explicit `--replace`, the just-created Telegram session is logged
+  out before the local files and row are restored; an explicit replacement
+  continues to permit the identity change.
+- Cancelling `media.transcribe` now terminates the asynchronous Docker client,
+  waits until it can no longer race container creation, and removes the named
+  container immediately. CI builds the optional transcription image and checks
+  its non-root runtime and actionable exit-code contract.
+- The account daemon caps simultaneous local socket connections (default 64)
+  and returns a retryable busy refusal above the ceiling. Authenticated HTTP
+  requests are capped at 4 MiB and 120 arrivals per rolling minute by default,
+  before the MCP SDK parses them.
+- Fleet inbox and mentions totals now count accounts that were actually read,
+  alongside `accounts_attempted` and `accounts_failed`. A failure of an
+  explicitly named inbox account is an error instead of a successful empty
+  inbox.
+- `resolve_peer` coerces a numeric string to an integer itself, closing the MCP
+  path that could still send digits through Telethon's phone-number resolver
+  even though the CLI had already normalised them.
+- The top-level CLI safety net honours the exact root `--json` flag even when
+  an error is raised before Click creates its context, preserving the JSON
+  contract for scripts on every failure path.
+
 - **`telegram_inbox` quoted direct messages the read policy refuses.** Each row
   carries a `preview` — the last message's text — and it was attached from the
   dialog list without asking the safety kernel. Enumeration and reading are two
@@ -1020,13 +1074,9 @@ before that, breaking changes can happen on any `0.x` release.
   into `_authorise`, since `flock` cannot be acquired twice even in one
   process), so the refusal arrives with nothing written. With `--replace` the
   material the row names and the session file about to be written can be two
-  different auth keys; both are held. A login that fails for any other reason
-  still leaves the row with the error recorded; whether an existing registration
-  should instead be restored is an open question in `TASKS.md`, raised by
-  review. So is the one case this lock still does not cover — a *first* login,
-  where the lock's identity changes under it the moment the session file is
-  created. Neither is introduced here: both predate the change and are recorded
-  rather than quietly inherited.
+  different auth keys; both are held. Existing registrations are now restored
+  on failure, and the stable path lock described above covers the first-login
+  absent-to-created transition as well.
 
   The lock's own release moved into a `finally` of its own, so a failure while
   hardening the session file cannot strand an auth key until the process exits.
@@ -1156,6 +1206,18 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Security
 
+- A list of strings under a human-authored field is now delimited element by
+  element by the untrusted-content boundary, and sets the envelope marker flag.
+  Previously those values were only defanged, leaving a future list-valued
+  serializer less protected than the scalar form of the same field.
+- Failure payloads are now redacted as well as defanged, and carry
+  `meta.redacted: true`; secrets echoed through an argument, filename, or
+  upstream refusal no longer bypass the result-side redactor. Negative Telegram
+  peer ids are explicitly preserved rather than mistaken for phone numbers.
+- Warnings and `meta.extra` now cross the same redaction and untrusted-content
+  boundary as `data`. Whole warnings are delimited because a project-authored
+  sentence can interpolate a stranger-authored title.
+
 - **A plan's message snapshot now identifies the attachment, not just the
   caption.** The snapshot digested the message *body*, which is empty for every
   photo posted without one — so two different photos under the same id produced
@@ -1174,6 +1236,9 @@ before that, breaking changes can happen on any `0.x` release.
   whenever they agree about that part and differ about another. `has_media` is
   compared too: an attachment *removed* since the plan was written leaves
   nothing to fingerprint on either side.
+  Media types with no native Telegram id now add a deterministic SHA-256 of
+  their public serialized value, so two locations, contacts, dice or invoices
+  no longer collapse to the same empty fingerprint.
 - `777000` (Telegram Service Notifications, where login codes and 2FA resets
   arrive) and Saved Messages are excluded as constants in `config.py`, checked
   before any allow/deny list in `safety.py` — no configuration value can reopen

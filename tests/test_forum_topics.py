@@ -29,7 +29,7 @@ from telegram_ai_cli.links import parse_telegram_link
 from telegram_ai_cli.ops._common import telegram_result
 from telegram_ai_cli.ops._serialize import is_forum, topic_summary
 from telegram_ai_cli.ops.chats import guard_topic_filter, history_kwargs, topic_id_from
-from telegram_ai_cli.ops.topics import require_forum
+from telegram_ai_cli.ops.topics import ChatTopicsInput, _next_topic_cursor, require_forum
 from telegram_ai_cli.opspec import REGISTRY, Effect
 from telegram_ai_cli.safety import Capability, PeerKind, PeerRef
 from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
@@ -308,7 +308,7 @@ def test_listing_the_topics_of_a_forum_is_allowed() -> None:
     assert require_forum(PRIVATE_FORUM, forum=True, what="chat.topics") is None
 
 
-# --- a refusal is outside the wrapper, so it carries no stranger's text ------
+# --- a refusal never presents a stranger's text as project-authored prose ----
 
 
 @pytest.mark.parametrize(
@@ -321,13 +321,7 @@ def test_listing_the_topics_of_a_forum_is_allowed() -> None:
     ],
 )
 def test_a_refusal_names_the_chat_by_id_and_never_by_its_title(refuse) -> None:
-    """An error is built outside `telegram_result`.
-
-    `Envelope.failure` neither wraps nor defangs what it carries, so a chat
-    title quoted into a refusal would reach the reader as unmarked text in a
-    field it has every reason to trust — and a title is written by whoever
-    created the chat.
-    """
+    """A title in project-authored prose is still misleading after defanging."""
     hostile = PeerRef(
         peer_id=PLACEHOLDER_ID,
         kind=PeerKind.GROUP,
@@ -359,3 +353,28 @@ def test_listing_topics_is_a_read_tool_gated_by_the_chat_read_capability() -> No
 def test_chat_read_publishes_the_topic_argument() -> None:
     schema = REGISTRY.by_name("chat.read").input_schema()
     assert "topic_id" in schema["properties"]
+
+
+def test_topic_listing_publishes_an_atomic_three_part_cursor() -> None:
+    schema = REGISTRY.by_name("chat.topics").input_schema()
+    assert {"offset_date", "offset_id", "offset_topic"} <= set(schema["properties"])
+
+    with pytest.raises(ValueError, match="one cursor"):
+        ChatTopicsInput(chat="-1001234567890", offset_id=4231)
+
+
+def test_a_full_topic_page_returns_the_cursor_for_its_last_row() -> None:
+    first = FakeTopic(id=12, top_message=4231)
+    last = FakeTopic(
+        id=11,
+        top_message=4200,
+        date=datetime(2026, 7, 31, 8, 0, tzinfo=UTC),
+    )
+
+    cursor = _next_topic_cursor([first, last], limit=2, total=5)
+
+    assert cursor == {
+        "offset_date": "2026-07-31T08:00:00+00:00",
+        "offset_id": 4200,
+        "offset_topic": 11,
+    }

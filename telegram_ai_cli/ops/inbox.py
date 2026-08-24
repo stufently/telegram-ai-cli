@@ -199,11 +199,17 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
     collected: list[dict[str, Any]] = []
     hidden_total = 0
     withheld_total = 0
+    accounts_read = 0
 
     for label in labels:
         try:
             rows, hidden, withheld = await _sweep_account(ctx, label, params)
         except Exception as exc:  # noqa: BLE001 - one bad account must not blank the fleet
+            if params.account is not None:
+                # A named account is the whole request. Turning its failure
+                # into an empty successful inbox says it was quiet when nobody
+                # managed to look.
+                raise
             # This project's own errors carry a sentence written for a person;
             # a bare class name turns "this account has no folder called Work"
             # into "NotFound", which is not an answer anybody can act on.
@@ -213,6 +219,7 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
         collected.extend(rows)
         hidden_total += hidden
         withheld_total += withheld
+        accounts_read += 1
 
     collected.sort(key=_rank)
     shown = collected[: params.limit]
@@ -233,7 +240,12 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
         "unread": sum(row["unread"] for row in collected),
         "mentions": sum(row["mentions"] for row in collected),
         "reactions": sum(row.get("reactions", 0) for row in collected),
-        "accounts": len(labels),
+        # ``accounts`` is the population behind the totals, not merely the
+        # number attempted. A fleet warning can otherwise turn "3 accounts,
+        # 0 waiting" into a claim based on only two accounts without saying so.
+        "accounts": accounts_read,
+        "accounts_attempted": len(labels),
+        "accounts_failed": len(labels) - accounts_read,
     }
 
     return telegram_result(

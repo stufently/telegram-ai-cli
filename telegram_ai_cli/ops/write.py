@@ -308,6 +308,12 @@ async def resolve_peer(client: Any, target: str | int) -> Resolved:
     guess. Guessing here would mean planning an action against a chat nobody
     named.
     """
+    if isinstance(target, str):
+        text = target.strip()
+        digits = text[1:] if text.startswith("-") else text
+        if digits.isdigit():
+            target = int(text)
+
     with telegram_errors(what=f"resolving {sanitize_line(str(target), limit=80)}"):
         try:
             entity = await client.get_entity(target)
@@ -651,8 +657,18 @@ class DeleteMessageInput(WriteInput):
 
 
 class ForwardMessageInput(RepeatableWriteInput):
-    source_chat: int | str
-    message_ids: list[MessageId] = Field(min_length=1, max_length=MAX_MESSAGE_IDS)
+    source_chat: int | str = Field(
+        description=(
+            "Source chat id, @username, or t.me link. A link that names a message "
+            "supplies message_ids on its own."
+        )
+    )
+    message_ids: list[MessageId] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_MESSAGE_IDS,
+        description="Messages to forward. Omit for a source_chat link to one message.",
+    )
     destination_chat: int | str
     silent: bool = False
     drop_author: bool = Field(
@@ -1115,16 +1131,22 @@ async def plan_forward_message(ctx: OperationContext, params: BaseModel) -> Plan
     p = cast(ForwardMessageInput, params)
     require_planning_profile(ctx, Capability.SEND, action="message.forward")
     async with open_writer(ctx, p.account) as (label, client):
-        source = await resolve_peer(client, p.source_chat)
+        source, chosen = await resolve_message_ids(
+            ctx,
+            client,
+            chat=p.source_chat,
+            message_ids=p.message_ids,
+            capability=Capability.READ_CHAT,
+            action="message.forward",
+        )
         destination = await resolve_peer(client, p.destination_chat)
         # Both ends are checked. Forwarding reads one chat and writes another,
         # so a rule that only guards the destination would let any readable
         # chat be copied anywhere the account may post — and one that only
         # guards the source would let a permitted chat be republished to a
         # forbidden one.
-        require_peer(ctx, Capability.READ_CHAT, source.ref, action="message.forward")
         require_peer(ctx, Capability.SEND, destination.ref, action="message.forward")
-        originals = await _fetch_messages(client, source, p.message_ids)
+        originals = await _fetch_messages(client, source, chosen)
 
     listed = "\n".join(
         f"  {m.id}: {quote_for_review(getattr(m, 'message', None) or '', limit=120)}"

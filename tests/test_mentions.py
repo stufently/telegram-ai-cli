@@ -158,6 +158,10 @@ class FakeClient:
         for dialog in self._dialogs:
             yield dialog
 
+    async def get_entity(self, reference: Any) -> Any:
+        del reference
+        return self._dialogs[0].entity
+
     async def __call__(self, request: Any) -> Any:
         self.requests.append(request)
         self.touched.append(type(request).__name__)
@@ -421,6 +425,52 @@ async def test_reactions_can_be_left_out(tmp_path: Path) -> None:
 
     assert GetUnreadReactionsRequest not in client.issued()
     assert rows_of(envelope)[0]["reactions"] == []
+
+
+async def test_one_chat_is_read_without_enumerating_dialogs_and_can_page(tmp_path: Path) -> None:
+    page = FakePage(
+        messages=[FakeMessage(id=80), FakeMessage(id=70)],
+        count=5,
+    )
+    client = FakeClient([FakeDialog(entity=group())], mentions=page)
+    ctx = build_ctx(tmp_path, client)
+
+    envelope = await handle_mentions(
+        ctx,
+        MentionsInput(
+            account="work",
+            chat="1234567890",
+            per_chat=2,
+            offset_id=90,
+            include_reactions=False,
+        ),
+    )
+
+    request = client.requests[0]
+    assert client.touched == ["GetUnreadMentionsRequest"]
+    assert request.offset_id == 90
+    assert rows_of(envelope)[0]["next_offset_id"]["mentions"] == 70
+    assert envelope.meta.truncated is True
+
+
+async def test_one_forum_topic_is_sent_as_top_msg_id(tmp_path: Path) -> None:
+    client = FakeClient(
+        [FakeDialog(entity=group())],
+        mentions=FakePage(messages=[FakeMessage(id=80)], count=1),
+    )
+    ctx = build_ctx(tmp_path, client)
+
+    await handle_mentions(
+        ctx,
+        MentionsInput(
+            account="work",
+            chat="1234567890",
+            topic_id=44,
+            include_reactions=False,
+        ),
+    )
+
+    assert client.requests[0].top_msg_id == 44
 
 
 async def test_the_busiest_chats_come_first_and_the_rest_are_reported(tmp_path: Path) -> None:

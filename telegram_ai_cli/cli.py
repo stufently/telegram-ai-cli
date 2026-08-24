@@ -507,6 +507,7 @@ def daemon_serve(ctx: click.Context, account: str, idle_timeout: float | None) -
             idle_timeout=(
                 idle_timeout if idle_timeout is not None else settings.daemon.idle_timeout_seconds
             ),
+            max_connections=settings.daemon.max_connections,
         )
         outcome = asyncio.run(daemon.serve())
     except TelegramAIError as exc:
@@ -551,12 +552,21 @@ def main() -> None:
     try:
         cli(standalone_mode=True)
     except TelegramAIError as exc:  # pragma: no cover - top-level safety net
-        # The net for anything raised outside a command — before the root
-        # context exists, so `--json` cannot be honoured here and the envelope
-        # is not built. What it can do is print the same sanitized text a
-        # refusal inside a command would: this is still a line on a terminal.
-        _emit(Envelope.failure(exc), as_json=False)
+        # The net can run before Click has created the root context. Inspecting
+        # only the exact, argument-free root flag keeps the machine-readable
+        # contract without trying to duplicate Click's parser here.
+        _emit(Envelope.failure(exc), as_json=_argv_requests_json(sys.argv[1:]))
         sys.exit(1)
+
+
+def _argv_requests_json(argv: list[str]) -> bool:
+    """Recognise the root ``--json`` flag without interpreting the command."""
+    for argument in argv:
+        if argument == "--":
+            break
+        if argument == "--json":
+            return True
+    return False
 
 
 if __name__ == "__main__":  # pragma: no cover

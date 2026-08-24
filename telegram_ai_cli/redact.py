@@ -112,6 +112,12 @@ def redact(text: str) -> str:
     text = _CARD.sub(_card_sub, text)
 
     def _phone_sub(match: re.Match[str]) -> str:
+        # Telegram's marked channel ids are negative decimal numbers (commonly
+        # ``-100…``).  The sign sits just outside the permissive phone match,
+        # so without this guard an error such as ``peer -100123…`` becomes a
+        # fake phone disclosure and loses the id needed to act on the refusal.
+        if match.start() > 0 and match.string[match.start() - 1] == "-":
+            return match.group(0)
         digits = re.sub(r"\D", "", match.group(0))
         # Below nine digits it is more likely an id or an amount than a number
         # someone can be reached on.

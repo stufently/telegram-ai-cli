@@ -23,9 +23,10 @@ same afterwards.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ..context import OperationContext
 from ..envelope import Envelope
@@ -52,6 +53,27 @@ class ChatTopicsInput(ReadInput):
         default=None,
         description="Only topics whose title matches this text (Telegram does the matching).",
     )
+    offset_date: datetime | None = Field(
+        default=None,
+        description="Cursor date returned by the previous page; use with both offset ids.",
+    )
+    offset_id: int = Field(
+        default=0,
+        ge=0,
+        description="Cursor top-message id returned by the previous page.",
+    )
+    offset_topic: int = Field(
+        default=0,
+        ge=0,
+        description="Cursor topic id returned by the previous page.",
+    )
+
+    @model_validator(mode="after")
+    def _cursor_is_atomic(self) -> ChatTopicsInput:
+        supplied = (self.offset_date is not None, self.offset_id != 0, self.offset_topic != 0)
+        if any(supplied) and not all(supplied):
+            raise ValueError("offset_date, offset_id and offset_topic form one cursor")
+        return self
 
 
 def require_forum(ref: PeerRef, *, forum: bool, what: str) -> None:
@@ -101,31 +123,29 @@ async def handle_chat_topics(ctx: OperationContext, params: ChatTopicsInput) -> 
         from telethon.tl.functions.messages import GetForumTopicsRequest
 
         with telegram_errors(what="chat.topics"):
-            # `offset_*` are a three-part cursor (date, message id, topic id)
-            # taken from the last row of a previous page. Only the first page is
-            # served here — `limit` goes to 500, and `truncated` says when that
-            # was not enough rather than pretending the forum is smaller.
             result = await account.client(
                 GetForumTopicsRequest(
                     peer=entity,
-                    offset_date=None,
-                    offset_id=0,
-                    offset_topic=0,
+                    offset_date=params.offset_date,
+                    offset_id=params.offset_id,
+                    offset_topic=params.offset_topic,
                     limit=params.limit,
                     q=params.search or None,
                 )
             )
 
-        rows = [topic_summary(topic, chat=ref) for topic in getattr(result, "topics", None) or []]
+        topics = list(getattr(result, "topics", None) or [])
+        rows = [topic_summary(topic, chat=ref) for topic in topics]
 
     total = _count_of(result, len(rows))
+    next_cursor = _next_topic_cursor(topics, limit=params.limit, total=total)
     return telegram_result(
         ctx,
-        {"chat": peer_summary(entity), "topics": rows},
+        {"chat": peer_summary(entity), "topics": rows, "next_cursor": next_cursor},
         account=account.label,
         returned=len(rows),
         total=total,
-        truncated=bool(total is not None and total > len(rows)),
+        truncated=next_cursor is not None,
         truncated_reason="limit",
         warnings=warnings,
     )
@@ -135,6 +155,26 @@ def _count_of(result: Any, fallback: int) -> int | None:
     """How many topics the forum has, as Telegram counts them."""
     count = getattr(result, "count", None)
     return int(count) if isinstance(count, int) else fallback
+
+
+def _next_topic_cursor(
+    topics: list[Any], *, limit: int, total: int | None
+) -> dict[str, Any] | None:
+    """Build Telegram's three-part cursor from the last concrete topic."""
+    if len(topics) < limit or (total is not None and total <= len(topics)):
+        return None
+    for topic in reversed(topics):
+        date = getattr(topic, "date", None)
+        top_message = getattr(topic, "top_message", None)
+        topic_id = getattr(topic, "id", None)
+        if date is None or top_message is None or topic_id is None:
+            continue
+        return {
+            "offset_date": date.isoformat() if hasattr(date, "isoformat") else str(date),
+            "offset_id": int(top_message),
+            "offset_topic": int(topic_id),
+        }
+    return None
 
 
 CHAT_TOPICS = REGISTRY.register(

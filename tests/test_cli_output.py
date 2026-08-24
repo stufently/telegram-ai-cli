@@ -11,8 +11,12 @@ titles.
 
 from __future__ import annotations
 
+import json
+import sys
+
 import pytest
 
+from telegram_ai_cli import cli as cli_module
 from telegram_ai_cli.cli import _emit
 from telegram_ai_cli.envelope import Envelope
 from telegram_ai_cli.errors import NotFound
@@ -44,3 +48,22 @@ def test_a_forged_marker_is_defanged_on_the_way_to_the_terminal(
     assert CLOSE_MARKER not in printed
     assert OPEN_MARKER not in printed
     assert "chat [/untrusted] x" in printed
+
+
+def test_the_top_level_safety_net_honours_json(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(**_kwargs: object) -> None:
+        raise NotFound("outside the command")
+
+    monkeypatch.setattr(cli_module, "_attach", lambda _root: None)
+    monkeypatch.setattr(cli_module, "cli", fail)
+    monkeypatch.setattr(sys, "argv", ["tg-ai", "--json", "schema"])
+
+    with pytest.raises(SystemExit) as stopped:
+        cli_module.main()
+
+    captured = capsys.readouterr()
+    assert stopped.value.code == 1
+    assert captured.err == ""
+    assert json.loads(captured.out)["error"]["code"] == "NOT_FOUND"

@@ -616,6 +616,7 @@ file *is* the auth key in the clear, by the nature of MTProto session storage;
 | `daemon.idle_timeout_seconds` | `300` | Stop and remove the socket after this long with nothing to do |
 | `daemon.connect_timeout_seconds` | `2.0` | How long to wait for the socket to accept |
 | `daemon.request_timeout_seconds` | `900.0` | How long to wait for an answer once the request has left |
+| `daemon.max_connections` | `64` | Maximum simultaneous local socket connections; excess callers get a retryable busy refusal |
 
 Off by default, and worth turning on for one reason. An auth key admits exactly
 one connected client — two desynchronise the message sequence and Telegram may
@@ -653,6 +654,8 @@ configuration, restart the daemon.
 | `http.min_token_length` | `16` | Shortest token accepted |
 | `http.path` | `/mcp` | Where the Streamable HTTP endpoint is served |
 | `http.session_idle_timeout_seconds` | `1800` | Drop an MCP session that has gone this long without a request |
+| `http.max_request_body_bytes` | `4194304` | Reject a request body larger than this before the MCP SDK sees it |
+| `http.requests_per_minute` | `120` | Process-wide limit for authenticated HTTP request arrivals |
 
 Used only by `tg-ai mcp --http`; the default stdio transport reads none of it.
 Two of these are not really settings, because neither has a value that turns the
@@ -679,6 +682,12 @@ A missing, malformed and wrong token get byte-for-byte the same bare `401` with
 `WWW-Authenticate: Bearer` and nothing else — no hint about length, prefix or
 validity — and the comparison is `hmac.compare_digest`, so the timing says
 nothing either. The token is never written to a log line, not even truncated.
+
+After authentication, the transport buffers at most
+`http.max_request_body_bytes` and returns `413` above it. It also admits at most
+`http.requests_per_minute` arrivals per rolling minute and returns `429` with a
+`Retry-After` header after that. These are process-wide loopback safeguards, not
+substitutes for the per-account and per-chat action limits.
 
 ## Telethon behaviour
 

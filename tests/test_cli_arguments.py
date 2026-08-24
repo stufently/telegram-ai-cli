@@ -27,6 +27,7 @@ from pydantic_core import PydanticUndefined
 import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
 from telegram_ai_cli import cli as cli_module
 from telegram_ai_cli.envelope import Envelope
+from telegram_ai_cli.ops.write import resolve_peer
 from telegram_ai_cli.opspec import REGISTRY
 
 
@@ -206,6 +207,31 @@ def test_every_peer_field_in_the_registry_reads_an_id_as_an_id() -> None:
         assert isinstance(option.type, cli_module._IntOrText), (
             f"{' '.join(op.cli)} --{name} reads a numeric id as a phone number"
         )
+
+
+@pytest.mark.asyncio
+async def test_resolver_itself_coerces_a_numeric_string_from_non_cli_callers() -> None:
+    """MCP may still send a schema-valid integer as a JSON string in practice."""
+    from telethon.tl.types import Chat
+
+    class Client:
+        seen: Any = None
+
+        async def get_entity(self, target: Any) -> Any:
+            self.seen = target
+            return Chat(
+                id=4242,
+                title="Test",
+                photo=None,
+                participants_count=1,
+                date=None,
+                version=1,
+            )
+
+    client = Client()
+    await resolve_peer(client, "-4242")
+
+    assert client.seen == -4242
 
 
 # --- object-valued options -------------------------------------------------

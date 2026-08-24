@@ -179,6 +179,25 @@ async def test_a_link_names_the_message_an_edit_rewrites(
     assert plan.preconditions["message"]["id"] == 412
 
 
+async def test_a_link_names_the_single_message_to_forward(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    client = client_with_message()
+    ctx = build_ctx(conn, tmp_path, client)
+
+    plan, params = await _plan_and_params(
+        ctx,
+        ForwardMessageInput(source_chat=LINK, destination_chat=MARKED_GROUP_ID),
+        plan_forward_message,
+    )
+
+    assert plan.preconditions["messages"][0]["id"] == 412
+    assert params.message_ids is None, "the link remains the source of truth in the stored plan"
+
+    prepared = await _verify(ctx, client, plan, params)
+    assert prepared.message_ids == [412]
+
+
 async def test_a_link_names_the_one_message_a_delete_removes(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:

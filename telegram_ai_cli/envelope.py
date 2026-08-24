@@ -41,6 +41,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Self
 
 from .errors import TelegramAIError
+from .redact import redact_mapping
 from .untrusted import CLOSE_MARKER, OPEN_MARKER, has_untrusted_field, wrap_untrusted
 
 TruncationReason = Literal["limit", "budget", "quota", "size"]
@@ -152,9 +153,10 @@ class Envelope:
         delimiters that were never written, which is the same lie in the other
         direction as omitting the flag when they were.
         """
-        raw = exc.to_dict()
+        raw = redact_mapping(exc.to_dict())
         error = wrap_untrusted(raw)
         meta = meta or Meta()
+        meta = replace(meta, redacted=True)
         if has_untrusted_field(raw):
             meta = replace(
                 meta,

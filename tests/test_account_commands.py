@@ -20,14 +20,14 @@ import pytest
 
 import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
 import telegram_ai_cli.ops.accounts as account_ops
-from telegram_ai_cli.accounts.lock import SessionLock
+from telegram_ai_cli.accounts.lock import SessionLock, SessionLocks
 from telegram_ai_cli.accounts.login import LoginResult, login_and_register, session_file_lock
 from telegram_ai_cli.accounts.models import AccountSource, AccountStatus
-from telegram_ai_cli.accounts.paths import SessionPaths, session_lock_path
+from telegram_ai_cli.accounts.paths import SessionPaths, session_lock_path, session_lock_paths
 from telegram_ai_cli.cli import _attach
 from telegram_ai_cli.config import PathsConfig, Settings
 from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import ErrorCode, InvalidInput, SessionLocked
+from telegram_ai_cli.errors import AuthRequired, ErrorCode, InvalidInput, SessionLocked
 from telegram_ai_cli.ops.accounts import (
     AddAccountInput,
     LoginInput,
@@ -179,6 +179,116 @@ async def test_login_reuses_what_the_row_already_knows(tmp_path, monkeypatch) ->
     assert captured["replace"] is True
 
 
+async def test_an_authorised_session_refuses_a_different_phone_before_rewriting(
+    tmp_path,
+) -> None:
+    """An idempotent login must not turn an unverified argument into account data."""
+    with context_over(tmp_path) as ctx:
+        paths = ctx.accounts.paths_for("work")
+        record = ctx.accounts.store.upsert(
+            "work",
+            AccountSource.SESSION_FILE,
+            session_path=str(paths.session_file),
+            phone="+15551234",
+        )
+        ctx.accounts.store.set_user_id(record.label, 4242)
+        ctx.accounts.store.set_status(record.label, AccountStatus.OK, None)
+
+        with pytest.raises(InvalidInput, match="different phone"):
+            await login_and_register(
+                ctx.accounts.store,
+                label="work",
+                phone="+15559999",
+                sessions_dir=ctx.accounts.sessions_dir,
+                replace=True,
+            )
+
+        after = ctx.accounts.store.require("work")
+
+    assert after.phone == "+15551234"
+    assert after.user_id == 4242
+    assert after.status is AccountStatus.OK
+
+
+async def test_a_discovered_phone_mismatch_records_the_session_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """A refused argument must not leave its false value in an otherwise valid row."""
+    from telegram_ai_cli.accounts import login as login_mod
+
+    async def authorised(**kwargs):
+        return LoginResult(
+            label=str(kwargs["label"]),
+            phone="+15551234",
+            session_path=tmp_path / "sessions" / "work.session",
+            user_id=4242,
+        )
+
+    monkeypatch.setattr(login_mod, "interactive_login", authorised)
+
+    with context_over(tmp_path) as ctx:
+        with pytest.raises(InvalidInput, match="different phone"):
+            await login_mod.login_and_register(
+                ctx.accounts.store,
+                label="work",
+                phone="+15559999",
+                sessions_dir=ctx.accounts.sessions_dir,
+            )
+
+        record = ctx.accounts.store.require("work")
+
+    assert record.phone == "+15551234"
+    assert record.user_id == 4242
+    assert record.status is AccountStatus.OK
+
+
+async def test_a_failed_replacement_restores_the_old_row_and_session(tmp_path, monkeypatch) -> None:
+    """Replacement is published only after authorisation succeeds."""
+    from telegram_ai_cli.accounts import login as login_mod
+
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    session = sessions / "work.session"
+    session.write_bytes(b"known-good-session")
+    session.chmod(0o600)
+
+    async def rejected(**kwargs):
+        session.write_bytes(b"partial-new-session")
+        raise AuthRequired("Telegram rejected the replacement")
+
+    monkeypatch.setattr(login_mod, "interactive_login", rejected)
+
+    with context_over(tmp_path) as ctx:
+        store = ctx.accounts.store
+        old = store.upsert(
+            "work",
+            AccountSource.SESSION_FILE,
+            session_path=str(session),
+            phone="+15551234",
+            api_id=1234,
+            api_hash="old-secret",
+        )
+        store.set_user_id(old.label, 4242)
+        store.set_status(old.label, AccountStatus.OK, None)
+        before = store.require("work")
+
+        with pytest.raises(AuthRequired, match="rejected"):
+            await login_mod.login_and_register(
+                store,
+                label="work",
+                phone="+15551234",
+                sessions_dir=sessions,
+                api_id=9999,
+                api_hash="new-secret",
+                replace=True,
+            )
+
+        after = store.require("work")
+
+    assert after == before
+    assert session.read_bytes() == b"known-good-session"
+
+
 async def test_login_will_not_quietly_replace_an_imported_account(tmp_path) -> None:
     """A tdata or session-file account is already authorised.
 
@@ -198,6 +308,40 @@ async def test_login_will_not_quietly_replace_an_imported_account(tmp_path) -> N
 
 
 # --- a login does not rewrite a row another process is using -----------------
+
+
+def test_the_primary_lock_does_not_change_when_the_session_is_created(tmp_path) -> None:
+    """The first connection must not move from a path lock to an inode lock."""
+    paths = SessionPaths(tmp_path / "sessions", "work")
+    before = session_file_lock(paths)
+
+    paths.sessions_dir.mkdir(parents=True)
+    paths.session_file.write_bytes(b"session")
+
+    assert session_file_lock(paths) == before
+    assert session_lock_paths("session_file", str(paths.session_file), paths)[0] == before
+
+
+def test_hard_links_share_the_additional_inode_lock(tmp_path) -> None:
+    """Stable path locking must not lose the existing hard-link protection."""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    first = sessions / "first.session"
+    second = sessions / "second.session"
+    first.write_bytes(b"session")
+    second.hardlink_to(first)
+    first_paths = session_lock_paths("session_file", str(first), SessionPaths(sessions, "first"))
+    second_paths = session_lock_paths("session_file", str(second), SessionPaths(sessions, "second"))
+
+    assert first_paths[0] != second_paths[0]
+    assert first_paths[1] == second_paths[1]
+
+    holder = SessionLocks(first_paths).acquire()
+    try:
+        with pytest.raises(SessionLocked):
+            SessionLocks(second_paths).acquire()
+    finally:
+        holder.release()
 
 
 async def test_a_login_on_a_connected_account_changes_nothing(tmp_path) -> None:

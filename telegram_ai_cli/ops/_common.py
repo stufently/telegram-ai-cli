@@ -45,7 +45,7 @@ from ..errors import (
 )
 from ..redact import redact_mapping
 from ..safety import Capability, PeerKind, PeerRef
-from ..untrusted import CLOSE_MARKER, OPEN_MARKER, wrap_untrusted
+from ..untrusted import CLOSE_MARKER, OPEN_MARKER, wrap, wrap_untrusted
 
 #: Hard ceiling on any page of Telegram objects, published in every schema that
 #: has a ``limit``. A caller that wants more pages with ``before_id`` rather
@@ -166,6 +166,13 @@ def telegram_result(
     redacted = redaction_enabled(ctx.settings)
     body = redact_mapping(data) if redacted else data
     body = wrap_untrusted(body)
+    safe_warnings = redact_mapping(warnings or []) if redacted else warnings or []
+    # A warning is prose, so it cannot structurally identify which substring
+    # came from Telegram. Frame the whole sentence: over-marking our connective
+    # words is safe, while leaving an interpolated title bare is not.
+    safe_warnings = [wrap(str(item)) for item in safe_warnings]
+    safe_extra = redact_mapping(extra or {}) if redacted else extra or {}
+    safe_extra = wrap_untrusted(safe_extra)
     meta = Meta(
         returned=returned,
         total=total,
@@ -175,9 +182,9 @@ def telegram_result(
         redacted=redacted,
         untrusted_content=True,
         untrusted_markers=(OPEN_MARKER, CLOSE_MARKER),
-        extra=extra or {},
+        extra=safe_extra,
     )
-    return Envelope.success(body, warnings=warnings or [], meta=meta)
+    return Envelope.success(body, warnings=safe_warnings, meta=meta)
 
 
 def iso(value: datetime | None) -> str | None:

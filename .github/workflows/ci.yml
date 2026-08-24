@@ -96,3 +96,26 @@ jobs:
         # No --entrypoint override needed: the image's own ENTRYPOINT is
         # ["tg-ai"] and its default CMD is ["--help"].
         run: docker run --rm telegram-ai-cli:ci
+
+  transcribe-container:
+    name: optional transcriber (build + contract)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the optional image
+        run: docker build -f Dockerfile.transcribe -t telegram-ai-cli-transcribe:ci .
+      - name: Verify non-root runtime
+        run: |
+          uid="$(docker run --rm --entrypoint id telegram-ai-cli-transcribe:ci -u)"
+          test "$uid" != "0"
+      - name: Missing model uses the documented exit status
+        run: |
+          set +e
+          docker run --rm --network none telegram-ai-cli-transcribe:ci \
+            transcribe --input /audio/absent.oga --max-seconds 1
+          status="$?"
+          set -e
+          if [ "$status" != "3" ]; then
+            echo "::error::expected missing-model exit 3, got $status"
+            exit 1
+          fi

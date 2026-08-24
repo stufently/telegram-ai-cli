@@ -149,14 +149,14 @@ async def test_the_gate_is_reached_only_after_the_registry_matched_the_name(
 ) -> None:
     """Which is what makes the name quoted in the gate's refusal safe to quote.
 
-    `Envelope.failure` neither wraps nor defangs, so a refusal must not repeat
-    caller-supplied text. An unknown name never reaches the gate — it is
+    A failure payload is redacted and defanged, but a refusal still must not
+    repeat caller-supplied text as project-authored prose. An unknown name never
+    reaches the gate — it is
     `UNKNOWN_OPERATION` from the registry first, so by the time the gate speaks,
     the string it names is one of this project's own constants.
 
-    (That earlier message *does* echo the name it was given. It predates this
-    gate and is part of the standing `Envelope.failure` gap in TASKS.md; the
-    point asserted here is the ordering, not that refusal.)
+    (That earlier message *does* echo the name it was given, safely inside the
+    failure boundary; the point asserted here is the gate's ordering.)
     """
     server = build_server(config_path=config(tmp_path, mcp={"tools": []}))
 

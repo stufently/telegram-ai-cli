@@ -37,7 +37,7 @@ from ..errors import (
 )
 from ..secretbox import SecretBox
 from .fs import harden_path
-from .lock import SessionLock
+from .lock import SessionLocks
 from .models import AccountSource, AccountStatus
 from .proxy import redact_proxy_url, redact_secrets
 from .runtime import recoverable_errors, revoked_errors, telethon_options
@@ -97,7 +97,7 @@ async def build_client(
     paths = spec.paths(sessions_dir).prepare()
     proxy = spec.proxy()
     options = telethon_options(settings) | telethon_kwargs
-    held = SessionLock(spec.lock_path(sessions_dir)).acquire() if lock else None
+    held = SessionLocks(spec.lock_paths(sessions_dir)).acquire() if lock else None
     client: TelegramClient | None = None
     try:
         if spec.source is AccountSource.TDATA:

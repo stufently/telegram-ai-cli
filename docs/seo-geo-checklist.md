@@ -1,10 +1,10 @@
 # SEO / GEO checklist — GitHub UI steps
 
 Everything that can live in the repository (`README.md`, `llms.txt`,
-`CITATION.cff`, `pyproject.toml` keywords, badges) is already there. The items
-below can only be set through GitHub's web UI or API — they are not files a
-commit can carry — so they need a person with admin rights on the repository
-to go through them once, and to revisit them if the pitch changes.
+`CITATION.cff`, `pyproject.toml` keywords, badges) is already there. Remaining
+unchecked items either need GitHub/PyPI/release authority or deliberately wait
+for the first public release; the authoritative hand-off list is
+[`TASKS.md`](../TASKS.md).
 
 Rationale for why this matters at all: the design brief for this project
 (`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`, §7) treats
@@ -74,9 +74,9 @@ the README's Releasing section) — but nothing is claimed on PyPI until the
 repository owner registers the pending publisher, because a name on a public
 registry is claimed permanently. When that happens:
 
-- [ ] Confirm `keywords`, `description` and `[project.urls]` in
-      `pyproject.toml` are still accurate (they already carry the same terms
-      as the GitHub topics above, so PyPI's own search picks them up too).
+- [x] Confirm `keywords`, `description` and `[project.urls]` in
+      `pyproject.toml` are still accurate. *(Rechecked 2026-08-24 against the
+      release-candidate README and the GitHub topics.)*
 - [ ] Register the project on [MCP registries](https://github.com/modelcontextprotocol)
       /catalogs once one is settled on, using the same name and description.
 

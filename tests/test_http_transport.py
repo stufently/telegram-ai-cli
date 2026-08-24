@@ -32,6 +32,7 @@ async def call_asgi(
     path: str = "/mcp",
     method: str = "POST",
     headers: list[tuple[bytes, bytes]] | None = None,
+    body_bytes: bytes = b"",
 ) -> tuple[int, dict[bytes, bytes], bytes]:
     """Drive one request through an ASGI app and collect the response."""
     scope = {
@@ -50,7 +51,7 @@ async def call_asgi(
     }
 
     async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": b"", "more_body": False}
+        return {"type": "http.request", "body": body_bytes, "more_body": False}
 
     status = 0
     response_headers: dict[bytes, bytes] = {}
@@ -233,6 +234,46 @@ async def test_the_scheme_is_matched_case_insensitively() -> None:
     app = http_server.BearerAuth(downstream, token=TOKEN)
     status, _, _ = await call_asgi(app, headers=[(b"authorization", f"bearer {TOKEN}".encode())])
     assert status == 200
+
+
+@pytest.mark.asyncio
+async def test_authenticated_request_body_is_capped_before_downstream() -> None:
+    reached = False
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        nonlocal reached
+        reached = True
+
+    app = http_server.BearerAuth(
+        http_server.RequestGuard(inner, max_body_bytes=8, requests_per_minute=10),
+        token=TOKEN,
+    )
+    status, _, body = await call_asgi(
+        app,
+        headers=[(b"authorization", f"Bearer {TOKEN}".encode())],
+        body_bytes=b"123456789",
+    )
+
+    assert status == 413
+    assert body == b"Request body too large"
+    assert reached is False
+
+
+@pytest.mark.asyncio
+async def test_authenticated_http_arrivals_have_a_process_wide_rate_limit() -> None:
+    app = http_server.BearerAuth(
+        http_server.RequestGuard(downstream, max_body_bytes=1024, requests_per_minute=2),
+        token=TOKEN,
+    )
+    auth = [(b"authorization", f"Bearer {TOKEN}".encode())]
+
+    assert (await call_asgi(app, headers=auth))[0] == 200
+    assert (await call_asgi(app, headers=auth))[0] == 200
+    status, headers, body = await call_asgi(app, headers=auth)
+
+    assert status == 429
+    assert int(headers[b"retry-after"]) >= 1
+    assert body == b"Too Many Requests"
 
 
 @pytest.mark.asyncio

@@ -51,9 +51,9 @@ from .fs import (
     write_private_text,
 )
 from .loader import build_client
-from .lock import SessionLock
+from .lock import SessionLocks
 from .models import AccountSource, AccountStatus
-from .paths import SessionPaths, sanitize_label, session_lock_path
+from .paths import SessionPaths, sanitize_label, session_lock_paths
 from .proxy import redact_secrets, validate_proxy_url
 from .spec import AccountSpec, LoadedClient, SessionFlag
 from .store import AccountRecord, AccountStore
@@ -442,7 +442,7 @@ class AccountRegistry:
     @contextmanager
     def _offline(
         self, label: str, record: AccountRecord | None = None
-    ) -> Iterator[SessionLock | None]:
+    ) -> Iterator[SessionLocks | None]:
         """Hold the account's session lock across a destructive change.
 
         Overwriting or deleting files under a running client corrupts the
@@ -455,9 +455,9 @@ class AccountRegistry:
             # path is not knowable from a label alone for every source.
             yield None
             return
-        path = session_lock_path(str(record.source), record.session_path, self.paths_for(label))
+        paths = session_lock_paths(str(record.source), record.session_path, self.paths_for(label))
         try:
-            lock = SessionLock(path).acquire()
+            lock = SessionLocks(paths).acquire()
         except SessionLocked as exc:
             raise SessionLocked(
                 f"account {label!r} is currently connected; stop it first",

@@ -315,6 +315,14 @@ class HTTPConfig(BaseModel):
     #: the life of the process — and a session is created by any accepted
     #: request, so an abandoned client leaks one until a restart.
     session_idle_timeout_seconds: float = Field(default=1800.0, gt=0)
+    #: Explicitly cap request buffering before the SDK sees it. This mirrors the
+    #: SDK's current 4 MiB default but keeps the boundary ours if that default
+    #: changes in a dependency update.
+    max_request_body_bytes: int = Field(default=4 * 1024**2, ge=1024)
+    #: One authenticated local process can still accidentally spin on the
+    #: endpoint. A process-wide arrival limit bounds that failure without
+    #: pretending loopback and a bearer token make resource use free.
+    requests_per_minute: int = Field(default=120, ge=1)
 
 
 class DaemonConfig(BaseModel):
@@ -340,6 +348,10 @@ class DaemonConfig(BaseModel):
     #: How long to wait for an answer once the request has left. Generous: the
     #: work would otherwise be running in this process with no timeout at all.
     request_timeout_seconds: float = Field(default=900.0, gt=0)
+    #: Connections are cheap but not free: a peer that never sends a frame owns
+    #: a task until the 30-second header timeout. Excess peers are answered busy
+    #: immediately instead of growing that task set without a ceiling.
+    max_connections: int = Field(default=64, ge=1, le=4096)
 
 
 class SafetyConfig(BaseModel):

@@ -31,7 +31,9 @@ import getpass
 import inspect
 import logging
 import re
+import shutil
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -42,10 +44,10 @@ from ..config import Settings
 from ..errors import AuthRequired, FloodWait, InvalidInput, TelegramAIError
 from ..secretbox import SecretBox
 from .api_profile import resolve_api
-from .fs import harden_path
-from .lock import SessionLock
+from .fs import copy_private_file, ensure_private_dir, harden_path
+from .lock import SessionLocks
 from .models import AccountSource, AccountStatus
-from .paths import SessionPaths, session_lock_path
+from .paths import SessionPaths, session_lock_path, session_lock_paths
 from .proxy import (
     mask_secret,
     parse_proxy_url,
@@ -55,7 +57,7 @@ from .proxy import (
     validate_proxy_url,
 )
 from .sources import new_client
-from .store import AccountStore
+from .store import AccountRecord, AccountStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from opentele.tl import TelegramClient
@@ -68,6 +70,7 @@ PasswordCallback = Callable[[str], str | Awaitable[str]]
 #: Handed the ``tg://login`` URL to put in front of a person. It must not log,
 #: store or forward it — see the module docstring.
 QrDisplay = Callable[[str], None]
+IdentityCallback = Callable[["TelegramClient", Any, bool], Awaitable[None]]
 
 _PHONE_RE = re.compile(r"^\+?\d{6,20}$")
 
@@ -153,7 +156,7 @@ async def interactive_login(
     password_cb: PasswordCallback | None = None,
     code_attempts: int = DEFAULT_CODE_ATTEMPTS,
     password_attempts: int = DEFAULT_PASSWORD_ATTEMPTS,
-    lock: SessionLock | None = None,
+    lock: SessionLocks | None = None,
 ) -> LoginResult:
     """Sign one phone number in and leave an authorised session on disk.
 
@@ -194,7 +197,10 @@ async def interactive_login(
     )
     return LoginResult(
         label=done.paths.label,
-        phone=phone,
+        # ``get_me`` is the authoritative identity of an already-authorised
+        # session.  Fall back to the number that just completed the code flow
+        # only when Telegram omitted its own phone from the user object.
+        phone=done.phone or phone,
         session_path=done.paths.session_file,
         user_id=done.user_id,
         username=done.username,
@@ -214,7 +220,9 @@ async def qr_login(
     password_cb: PasswordCallback | None = None,
     password_attempts: int = DEFAULT_PASSWORD_ATTEMPTS,
     regenerations: int = DEFAULT_QR_REGENERATIONS,
-    lock: SessionLock | None = None,
+    lock: SessionLocks | None = None,
+    expected_user_id: int | None = None,
+    allow_identity_change: bool = False,
 ) -> LoginResult:
     """Sign in by showing a QR code that an authorised Telegram app scans.
 
@@ -237,6 +245,30 @@ async def qr_login(
             regenerations=regenerations,
         )
 
+    async def verify_identity(client: TelegramClient, me: Any, was_authorized: bool) -> None:
+        if expected_user_id is None or int(me.id) == expected_user_id or allow_identity_change:
+            return
+        # A QR token creates a remote session before get_me reveals who scanned
+        # it. Revoke that just-created session before its local auth key is
+        # rolled back. An already-authorised file predates this attempt and must
+        # never be logged out merely because a stale row disagrees with it.
+        if not was_authorized:
+            try:
+                await client.log_out()
+            except Exception:
+                raise AuthRequired(
+                    f"{label}: the QR code was scanned by a different account and "
+                    "the new Telegram session could not be revoked",
+                    suggestion=(
+                        "Open Telegram Settings → Devices, terminate the new session, "
+                        "then retry with the intended account."
+                    ),
+                ) from None
+        raise InvalidInput(
+            f"{label}: the QR code was scanned by a different account",
+            suggestion="Scan it with the registered account, or pass --replace explicitly.",
+        )
+
     done = await _authorise(
         label=label,
         sessions_dir=sessions_dir,
@@ -247,6 +279,7 @@ async def qr_login(
         box=box,
         sign_in=sign_in,
         lock=lock,
+        verify_identity=verify_identity,
     )
     log.info(
         "account %s logged in by QR: user_id=%s phone=%s proxy=%s",
@@ -274,7 +307,8 @@ async def _authorise(
     settings: Settings | None,
     box: SecretBox | None,
     sign_in: Callable[[TelegramClient, str], Awaitable[None]],
-    lock: SessionLock | None = None,
+    lock: SessionLocks | None = None,
+    verify_identity: IdentityCallback | None = None,
 ) -> _Authorised:
     """Connect under the account's lock, sign in if needed, harden what is left.
 
@@ -309,17 +343,26 @@ async def _authorise(
     # fails even inside one process. So the caller's lock is used as-is, and
     # released by whoever took it.
     borrowed = lock is not None
-    lock = lock if lock is not None else SessionLock(session_file_lock(paths)).acquire()
+    lock = (
+        lock
+        if lock is not None
+        else SessionLocks(
+            session_lock_paths(str(AccountSource.SESSION_FILE), str(paths.session_file), paths)
+        ).acquire()
+    )
     try:
         # Inside the try: a failure while constructing the client must still hand
         # the auth key back, or the next attempt reports a holder that is gone.
         client = new_client(str(paths.session_file), api, proxy, telethon_options(settings))
         await client.connect()
-        if not await client.is_user_authorized():
+        was_authorized = bool(await client.is_user_authorized())
+        if not was_authorized:
             await sign_in(client, paths.label)
         me = await client.get_me()
         if me is None:
             raise AuthRequired(f"{paths.label}: signed in but Telegram returned no user")
+        if verify_identity is not None:
+            await verify_identity(client, me, was_authorized)
         user_id = int(me.id)
         username = getattr(me, "username", None)
         phone = _phone_of(me)
@@ -365,7 +408,7 @@ def _phone_of(me: Any) -> str:
 
 
 @contextmanager
-def _account_offline(store: AccountStore, paths: SessionPaths) -> Iterator[SessionLock]:
+def _account_offline(store: AccountStore, paths: SessionPaths) -> Iterator[SessionLocks]:
     """Hold this account's auth key before the row naming it is rewritten.
 
     ``upsert`` moves ``phone``, ``source``, ``session_path`` and ``status`` —
@@ -384,27 +427,70 @@ def _account_offline(store: AccountStore, paths: SessionPaths) -> Iterator[Sessi
     and both have to be still before either is touched. The second is yielded,
     because it is the one the connection itself will run under.
     """
-    session_lock = session_file_lock(paths)
+    wanted = session_lock_paths(str(AccountSource.SESSION_FILE), str(paths.session_file), paths)
     record = store.get(paths.label)
-    also: SessionLock | None = None
+    lock_paths = list(wanted)
     if record is not None:
-        current = session_lock_path(str(record.source), record.session_path, paths)
-        if current != session_lock:
-            also = SessionLock(current).acquire()
-    try:
-        held = SessionLock(session_lock).acquire()
-    except BaseException:
-        if also is not None:
-            also.release()
-        raise
+        lock_paths.extend(session_lock_paths(str(record.source), record.session_path, paths))
+    held = SessionLocks(lock_paths).acquire()
     try:
         yield held
     finally:
+        held.release()
+
+
+def _login_managed_files(paths: SessionPaths) -> tuple[Path, ...]:
+    """Files a login may create or mutate while it owns the session lock."""
+    session = paths.session_file
+    return (
+        session,
+        session.with_name(session.name + "-journal"),
+        session.with_name(session.name + "-wal"),
+        session.with_name(session.name + "-shm"),
+        paths.api_file,
+    )
+
+
+@contextmanager
+def _preserve_existing_login(
+    store: AccountStore, paths: SessionPaths, previous: AccountRecord | None
+) -> Iterator[None]:
+    """Rollback an existing registration and its owned files on any failure.
+
+    New registrations intentionally retain an ``auth_failed`` row. Replacing an
+    existing one is different: the operator asked for a successful replacement,
+    not for the known-good registration to disappear if Telegram rejects the
+    attempt. The account lock is already held by the caller for this entire
+    context, so no loader can observe the temporary row or files.
+    """
+    if previous is None:
+        yield
+        return
+
+    paths.prepare()
+    backup = Path(tempfile.mkdtemp(prefix=f".{paths.label}-login-backup-", dir=paths.sessions_dir))
+    ensure_private_dir(backup)
+    saved: dict[Path, Path] = {}
+    try:
+        for index, target in enumerate(_login_managed_files(paths)):
+            if target.exists() or target.is_symlink():
+                copy = backup / str(index)
+                copy_private_file(target, copy)
+                saved[target] = copy
         try:
-            held.release()
-        finally:
-            if also is not None:
-                also.release()
+            yield
+        except BaseException:
+            for target in _login_managed_files(paths):
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink(missing_ok=True)
+            for target, copy in saved.items():
+                copy_private_file(copy, target)
+            store.restore(previous)
+            raise
+    finally:
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 async def login_and_register(
@@ -437,41 +523,68 @@ async def login_and_register(
     """
     paths = SessionPaths(Path(sessions_dir), label)
     with _account_offline(store, paths) as lock:
-        record = store.upsert(
-            paths.label,
-            AccountSource.SESSION_FILE,
-            session_path=str(paths.session_file),
-            phone=normalize_phone(phone),
-            api_id=api_id,
-            api_hash=api_hash,
-            proxy_url=validate_proxy_url(proxy_url),
-            replace=replace,
-        )
-        try:
-            result = await interactive_login(
-                label=record.label,
-                phone=phone,
-                sessions_dir=sessions_dir,
+        requested_phone = normalize_phone(phone)
+        previous = store.get(paths.label)
+        if (
+            previous is not None
+            and previous.source is AccountSource.SESSION_FILE
+            and previous.session_path == str(paths.session_file)
+            and previous.user_id is not None
+            and previous.phone
+            and normalize_phone(previous.phone) != requested_phone
+        ):
+            raise InvalidInput(
+                f"{paths.label}: this session is already authorised for a different phone number",
+                suggestion=(
+                    "Use the registered phone, or remove the existing account/session before "
+                    "signing in as another account."
+                ),
+            )
+        with _preserve_existing_login(store, paths, previous):
+            record = store.upsert(
+                paths.label,
+                AccountSource.SESSION_FILE,
+                session_path=str(paths.session_file),
+                phone=requested_phone,
                 api_id=api_id,
                 api_hash=api_hash,
-                proxy_url=proxy_url,
-                settings=settings,
-                box=box,
-                code_cb=code_cb,
-                password_cb=password_cb,
-                lock=lock,
+                proxy_url=validate_proxy_url(proxy_url),
+                replace=replace,
             )
-        except TelegramAIError as exc:
-            # last_error is displayed verbatim, so it gets the same redaction the
-            # loader applies. The messages raised here are careful today; the
-            # invariant must not depend on that staying true for every future
-            # Telethon error string.
-            clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
-            store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
-            raise
+            try:
+                result = await interactive_login(
+                    label=record.label,
+                    phone=phone,
+                    sessions_dir=sessions_dir,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    proxy_url=proxy_url,
+                    settings=settings,
+                    box=box,
+                    code_cb=code_cb,
+                    password_cb=password_cb,
+                    lock=lock,
+                )
+            except TelegramAIError as exc:
+                clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
+                store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
+                raise
 
-        store.set_user_id(record.label, result.user_id)
-        store.set_status(record.label, AccountStatus.OK, None)
+            if normalize_phone(result.phone) != requested_phone:
+                store.set_user_id(record.label, result.user_id)
+                store.set_phone(record.label, result.phone)
+                store.set_status(record.label, AccountStatus.OK, None)
+                raise InvalidInput(
+                    f"{record.label}: the existing session belongs to a different phone number",
+                    suggestion=(
+                        "Remove the existing account/session before signing in as another account."
+                    ),
+                )
+
+            store.set_user_id(record.label, result.user_id)
+            if result.phone != record.phone:
+                store.set_phone(record.label, result.phone)
+            store.set_status(record.label, AccountStatus.OK, None)
     return result
 
 
@@ -489,6 +602,7 @@ async def qr_login_and_register(
     display: QrDisplay | None = None,
     password_cb: PasswordCallback | None = None,
     replace: bool = False,
+    allow_identity_change: bool | None = None,
 ) -> LoginResult:
     """:func:`qr_login` plus the ``accounts`` row — the same row, written the
     same way and at the same moment as :func:`login_and_register` writes it.
@@ -503,44 +617,44 @@ async def qr_login_and_register(
     """
     paths = SessionPaths(Path(sessions_dir), label)
     with _account_offline(store, paths) as lock:
-        record = store.upsert(
-            paths.label,
-            AccountSource.SESSION_FILE,
-            session_path=str(paths.session_file),
-            phone=normalize_phone(phone) if phone else None,
-            api_id=api_id,
-            api_hash=api_hash,
-            proxy_url=validate_proxy_url(proxy_url),
-            replace=replace,
-        )
-        try:
-            result = await qr_login(
-                label=record.label,
-                sessions_dir=sessions_dir,
+        previous = store.get(paths.label)
+        with _preserve_existing_login(store, paths, previous):
+            record = store.upsert(
+                paths.label,
+                AccountSource.SESSION_FILE,
+                session_path=str(paths.session_file),
+                phone=normalize_phone(phone) if phone else None,
                 api_id=api_id,
                 api_hash=api_hash,
-                proxy_url=proxy_url,
-                settings=settings,
-                box=box,
-                display=display,
-                password_cb=password_cb,
-                lock=lock,
+                proxy_url=validate_proxy_url(proxy_url),
+                replace=replace,
             )
-        except TelegramAIError as exc:
-            # Redacted for the same reason the phone flow redacts it: last_error is
-            # displayed verbatim, and it outlives the terminal it was raised in.
-            clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
-            store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
-            raise
+            try:
+                result = await qr_login(
+                    label=record.label,
+                    sessions_dir=sessions_dir,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    proxy_url=proxy_url,
+                    settings=settings,
+                    box=box,
+                    display=display,
+                    password_cb=password_cb,
+                    lock=lock,
+                    expected_user_id=previous.user_id if previous is not None else None,
+                    allow_identity_change=(
+                        replace if allow_identity_change is None else allow_identity_change
+                    ),
+                )
+            except TelegramAIError as exc:
+                clean = redact_secrets(str(exc), api_hash, proxy_password(proxy_url))
+                store.set_status(record.label, AccountStatus.AUTH_FAILED, clean)
+                raise
 
-        store.set_user_id(record.label, result.user_id)
-        if result.phone != (record.phone or ""):
-            # Whoever scanned the code is the account now on this row. An unknown
-            # number clears the column rather than leaving the previous one: an
-            # empty phone is a gap, a stale one is a wrong answer that a later
-            # `account login` would act on.
-            store.set_phone(record.label, result.phone or None)
-        store.set_status(record.label, AccountStatus.OK, None)
+            store.set_user_id(record.label, result.user_id)
+            if result.phone != (record.phone or ""):
+                store.set_phone(record.label, result.phone or None)
+            store.set_status(record.label, AccountStatus.OK, None)
     return result
 
 

@@ -88,13 +88,18 @@ class FakeClient:
         session_file=None,
         authorized: bool = False,
         qr_error: BaseException | None = None,
+        user_id: int = 4242,
+        phone: str = "15551234",
     ) -> None:
         self.qr = qr
         self.session_file = session_file
         self.authorized = authorized
         self.qr_error = qr_error
+        self.user_id = user_id
+        self.phone = phone
         self.passwords: list[str] = []
         self.disconnected = False
+        self.logged_out = False
 
     async def connect(self) -> None:
         if self.session_file is not None:
@@ -116,7 +121,10 @@ class FakeClient:
         self.authorized = True
 
     async def get_me(self):
-        return type("Me", (), {"id": 4242, "username": "someone", "phone": "15551234"})()
+        return type("Me", (), {"id": self.user_id, "username": "someone", "phone": self.phone})()
+
+    async def log_out(self) -> None:
+        self.logged_out = True
 
     async def disconnect(self) -> None:
         self.disconnected = True
@@ -434,6 +442,47 @@ async def test_the_row_takes_the_number_of_whoever_scanned_the_code(tmp_path, mo
 
     assert record.phone == "+15559999"
     assert record.user_id == 999
+
+
+async def test_wrong_qr_scanner_is_logged_out_and_the_registration_is_restored(
+    tmp_path, monkeypatch
+) -> None:
+    sessions = tmp_path / "sessions"
+    session = sessions / "work.session"
+    sessions.mkdir()
+    session.write_bytes(b"known-good-session")
+    session.chmod(0o600)
+    client = FakeClient(FakeQrLogin([None]), session_file=session, user_id=999, phone="15559999")
+    monkeypatch.setattr(login_mod, "new_client", lambda *args, **kwargs: client)
+
+    with context_over(tmp_path) as ctx:
+        store = ctx.accounts.store
+        old = store.upsert(
+            "work",
+            AccountSource.SESSION_FILE,
+            session_path=str(session),
+            phone="+15551234",
+        )
+        store.set_user_id(old.label, 4242)
+        store.set_status(old.label, AccountStatus.OK, None)
+        before = store.require("work")
+
+        with pytest.raises(InvalidInput, match="different account"):
+            await qr_login_and_register(
+                store,
+                label="work",
+                sessions_dir=sessions,
+                phone=before.phone,
+                replace=True,
+                allow_identity_change=False,
+                display=lambda url: None,
+            )
+
+        after = store.require("work")
+
+    assert client.logged_out
+    assert after == before
+    assert session.read_bytes() == b"known-good-session"
 
 
 # --- the handler ------------------------------------------------------------

@@ -15,8 +15,10 @@ with no Telethon installed, and the type it cannot recognise degrades to
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from ..links import format_message_link
@@ -117,7 +119,7 @@ def display_name(entity: Any) -> str | None:
 
 def peer_summary(entity: Any) -> dict[str, Any]:
     """Identity of a peer, with no message content in it."""
-    return {
+    summary = {
         "id": marked_id(entity),
         "kind": str(peer_kind(entity)),
         "username": getattr(entity, "username", None),
@@ -128,6 +130,18 @@ def peer_summary(entity: Any) -> dict[str, Any]:
         "fake": bool(getattr(entity, "fake", False)),
         "deleted": bool(getattr(entity, "deleted", False)),
     }
+    linked_monoforum = getattr(entity, "linked_monoforum_id", None)
+    if linked_monoforum is not None:
+        # Telegram stores an unmarked channel id on the entity. Return the same
+        # marked form every other chat id in this API uses, so the value can be
+        # passed straight back to ``chat read`` or a write plan.
+        from telethon import utils
+        from telethon.tl.types import PeerChannel
+
+        summary["linked_monoforum_id"] = int(
+            utils.get_peer_id(PeerChannel(channel_id=int(linked_monoforum)))
+        )
+    return summary
 
 
 def media_summary(message: Any) -> dict[str, Any] | None:
@@ -208,6 +222,12 @@ def media_fingerprint(message: Any) -> dict[str, Any] | None:
     if media is None:
         return None
     parts = {name: ids for name in _MEDIA_PARTS if (ids := _ids_of(getattr(media, name, None)))}
+    if not parts:
+        # Contacts, locations, dice and invoices carry no Telegram object id.
+        # They are still editable message content, so calling every one of a
+        # kind ``{id: null, parts: {}}`` lets a swap pass verification. Hash a
+        # canonical private snapshot: only the digest enters the plan.
+        parts["opaque_sha256"] = [_opaque_media_digest(media)]
     summary = media_summary(message) or {}
     primary = next((parts[name][0] for name in _MEDIA_PARTS if name in parts), None)
     return {
@@ -217,6 +237,22 @@ def media_fingerprint(message: Any) -> dict[str, Any] | None:
         "id": primary,
         "parts": parts,
     }
+
+
+def _opaque_media_digest(media: Any) -> str:
+    """Stable digest for media types that expose no identity of their own."""
+    to_dict = getattr(media, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+    elif is_dataclass(media) and not isinstance(media, type):
+        value = asdict(media)
+    elif hasattr(media, "__dict__"):
+        value = vars(media)
+    else:
+        slots = getattr(type(media), "__slots__", ())
+        value = {name: getattr(media, name, None) for name in slots if not name.startswith("_")}
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _clip(text: str | None, limit: int) -> tuple[str | None, bool]:

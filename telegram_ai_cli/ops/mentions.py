@@ -40,7 +40,7 @@ import contextlib
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ..context import OperationContext
 from ..envelope import Envelope
@@ -51,8 +51,10 @@ from ._common import (
     MAX_DIALOG_SCAN,
     MAX_PAGE,
     ReadInput,
+    guard_hard_denied,
     hard_denied,
     require_enumeration,
+    require_peer,
     telegram_errors,
     telegram_result,
 )
@@ -64,6 +66,7 @@ from ._serialize import (
     peer_summary,
     recent_reactors,
 )
+from .chats import resolve_chat_ref
 
 #: Said in the payload rather than left as an empty list. Telegram attaches the
 #: reactors to the message only where the chat is small enough; elsewhere the
@@ -96,6 +99,35 @@ class MentionsInput(ReadInput):
         default=False,
         description="Include one-to-one conversations (requires safety.read.enumerate_dms).",
     )
+    chat: str | None = Field(
+        default=None,
+        description=(
+            "Optional chat id, @username or t.me link. When set, read only this chat "
+            "and do not enumerate dialogs."
+        ),
+    )
+    offset_id: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Return unread entries older than this message id. The response reports "
+            "separate next offsets for mentions and reactions."
+        ),
+    )
+    topic_id: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Forum topic id to filter. Requires chat; a topic-shaped t.me link can "
+            "supply it instead."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _topic_needs_chat(self) -> MentionsInput:
+        if self.topic_id is not None and self.chat is None:
+            raise ValueError("topic_id requires chat")
+        return self
 
 
 class _Candidate:
@@ -143,15 +175,23 @@ def _sender_index(result: Any) -> dict[int, Any]:
     return index
 
 
-async def _unread_page(client: Any, request: Any) -> tuple[list[Any], dict[int, Any]]:
+async def _unread_page(client: Any, request: Any) -> tuple[list[Any], dict[int, Any], int | None]:
     """Run one ``Get…`` request and unpack it. Nothing here acknowledges."""
     with telegram_errors(what="mentions.list"):
         result = await client(request)
     messages = list(getattr(result, "messages", None) or [])
-    return messages, _sender_index(result)
+    count = getattr(result, "count", None)
+    return messages, _sender_index(result), int(count) if isinstance(count, int) else None
 
 
-async def _mentions_of(client: Any, entity: Any, limit: int) -> tuple[list[Any], dict[int, Any]]:
+async def _mentions_of(
+    client: Any,
+    entity: Any,
+    limit: int,
+    *,
+    offset_id: int = 0,
+    topic_id: int | None = None,
+) -> tuple[list[Any], dict[int, Any], int | None]:
     # `messages.getUnreadMentions` — reports, never acknowledges. Its sibling
     # `ReadMentionsRequest` is what clears the badge, and it is not used here.
     from telethon.tl.functions.messages import GetUnreadMentionsRequest
@@ -159,12 +199,25 @@ async def _mentions_of(client: Any, entity: Any, limit: int) -> tuple[list[Any],
     return await _unread_page(
         client,
         GetUnreadMentionsRequest(
-            peer=entity, offset_id=0, add_offset=0, limit=limit, max_id=0, min_id=0
+            peer=entity,
+            offset_id=offset_id,
+            add_offset=0,
+            limit=limit,
+            max_id=0,
+            min_id=0,
+            top_msg_id=topic_id,
         ),
     )
 
 
-async def _reactions_of(client: Any, entity: Any, limit: int) -> tuple[list[Any], dict[int, Any]]:
+async def _reactions_of(
+    client: Any,
+    entity: Any,
+    limit: int,
+    *,
+    offset_id: int = 0,
+    topic_id: int | None = None,
+) -> tuple[list[Any], dict[int, Any], int | None]:
     # `messages.getUnreadReactions`, with the same relationship to
     # `ReadReactionsRequest`: this one reports, that one clears.
     from telethon.tl.functions.messages import GetUnreadReactionsRequest
@@ -172,7 +225,13 @@ async def _reactions_of(client: Any, entity: Any, limit: int) -> tuple[list[Any]
     return await _unread_page(
         client,
         GetUnreadReactionsRequest(
-            peer=entity, offset_id=0, add_offset=0, limit=limit, max_id=0, min_id=0
+            peer=entity,
+            offset_id=offset_id,
+            add_offset=0,
+            limit=limit,
+            max_id=0,
+            min_id=0,
+            top_msg_id=topic_id,
         ),
     )
 
@@ -259,13 +318,13 @@ async def _row_for(client: Any, candidate: _Candidate, params: MentionsInput) ->
     reactions: list[dict[str, Any]] = []
 
     if candidate.mentions:
-        messages, senders = await _mentions_of(client, candidate.entity, params.per_chat)
+        messages, senders, _ = await _mentions_of(client, candidate.entity, params.per_chat)
         mentions = [
             message_summary(message, chat=candidate.ref, senders=senders) for message in messages
         ]
 
     if candidate.reactions:
-        messages, senders = await _reactions_of(client, candidate.entity, params.per_chat)
+        messages, senders, _ = await _reactions_of(client, candidate.entity, params.per_chat)
         for message in messages:
             row = message_summary(message, chat=candidate.ref, senders=senders)
             reactors = _reactor_rows(message, senders)
@@ -338,6 +397,9 @@ async def _sweep_account(ctx: OperationContext, label: str, params: MentionsInpu
 
 
 async def handle_mentions(ctx: OperationContext, params: MentionsInput) -> Envelope:
+    if params.chat is not None:
+        return await _handle_scoped_mentions(ctx, params)
+
     require_enumeration(ctx, private=params.include_private, action="mentions.list")
 
     labels = [params.account] if params.account else visible_labels(ctx)
@@ -345,6 +407,7 @@ async def handle_mentions(ctx: OperationContext, params: MentionsInput) -> Envel
     rows: list[dict[str, Any]] = []
     found = mentions = reactions = hidden = withheld = 0
     scan_capped = False
+    accounts_read = 0
 
     for label in labels:
         try:
@@ -365,6 +428,7 @@ async def handle_mentions(ctx: OperationContext, params: MentionsInput) -> Envel
         hidden += sweep.hidden
         withheld += sweep.withheld
         scan_capped = scan_capped or sweep.scan_capped
+        accounts_read += 1
 
     rows.sort(key=lambda row: (-row["unread_mentions"], -row["unread_reactions"]))
     rows = rows[: params.limit]
@@ -394,7 +458,9 @@ async def handle_mentions(ctx: OperationContext, params: MentionsInput) -> Envel
         "chats": found,
         "mentions": mentions,
         "reactions": reactions,
-        "accounts": len(labels),
+        "accounts": accounts_read,
+        "accounts_attempted": len(labels),
+        "accounts_failed": len(labels) - accounts_read,
     }
 
     return telegram_result(
@@ -407,6 +473,93 @@ async def handle_mentions(ctx: OperationContext, params: MentionsInput) -> Envel
         truncated=len(rows) < found or scan_capped,
         truncated_reason="limit",
         warnings=warnings,
+    )
+
+
+def _next_offset(messages: list[Any], *, limit: int, total: int | None) -> int | None:
+    """Oldest id on a full page, suitable as Telegram's next ``offset_id``."""
+    if not messages or len(messages) < limit:
+        return None
+    if total is not None and total <= len(messages):
+        return None
+    ids = [int(message.id) for message in messages if getattr(message, "id", None) is not None]
+    return min(ids) if ids else None
+
+
+async def _handle_scoped_mentions(ctx: OperationContext, params: MentionsInput) -> Envelope:
+    """Read one chat directly, with independent pagination metadata per stream."""
+    async with open_account(ctx, params.account) as account:
+        entity, link = await resolve_chat_ref(account.client, params.chat or "", what="mentions")
+        ref = peer_ref(entity)
+        guard_hard_denied(ctx, ref, action="mentions.list")
+        require_peer(ctx, Capability.READ_CHAT, ref, action="mentions.list")
+
+        link_topic = link.topic_id if link is not None else None
+        if params.topic_id is not None and link_topic is not None and params.topic_id != link_topic:
+            from ..errors import InvalidInput
+
+            raise InvalidInput("topic_id disagrees with the topic in the chat link")
+        topic_id = params.topic_id or link_topic
+
+        mention_messages: list[Any] = []
+        mention_rows: list[dict[str, Any]] = []
+        mention_total = 0
+        if params.include_mentions:
+            mention_messages, senders, count = await _mentions_of(
+                account.client,
+                entity,
+                params.per_chat,
+                offset_id=params.offset_id,
+                topic_id=topic_id,
+            )
+            mention_rows = [
+                message_summary(message, chat=ref, senders=senders) for message in mention_messages
+            ]
+            mention_total = count if count is not None else len(mention_rows)
+
+        reaction_messages: list[Any] = []
+        reaction_rows: list[dict[str, Any]] = []
+        reaction_total = 0
+        if params.include_reactions:
+            reaction_messages, senders, count = await _reactions_of(
+                account.client,
+                entity,
+                params.per_chat,
+                offset_id=params.offset_id,
+                topic_id=topic_id,
+            )
+            for message in reaction_messages:
+                row = message_summary(message, chat=ref, senders=senders)
+                reactors = _reactor_rows(message, senders)
+                row["reactors"] = reactors
+                if not reactors:
+                    row["reactors_reason"] = NO_REACTORS
+                reaction_rows.append(row)
+            reaction_total = count if count is not None else len(reaction_rows)
+
+    cursors = {
+        "mentions": _next_offset(mention_messages, limit=params.per_chat, total=mention_total),
+        "reactions": _next_offset(reaction_messages, limit=params.per_chat, total=reaction_total),
+    }
+    truncated = any(value is not None for value in cursors.values())
+    row = {
+        "account": account.label,
+        "chat": peer_summary(entity),
+        "topic_id": topic_id,
+        "unread_mentions": mention_total,
+        "unread_reactions": reaction_total,
+        "mentions": mention_rows,
+        "reactions": reaction_rows,
+        "next_offset_id": cursors,
+    }
+    return telegram_result(
+        ctx,
+        {"chats": [row]},
+        account=account.label,
+        returned=1,
+        total=1,
+        truncated=truncated,
+        truncated_reason="per_chat" if truncated else None,
     )
 
 

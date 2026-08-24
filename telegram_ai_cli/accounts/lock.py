@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+from collections.abc import Iterable
 from pathlib import Path
 
 from ..errors import SessionLocked
@@ -72,6 +73,47 @@ class SessionLock:
         return self._fd is not None
 
     def __enter__(self) -> SessionLock:
+        return self.acquire()
+
+    def __exit__(self, *_exc: object) -> None:
+        self.release()
+
+
+class SessionLocks:
+    """Acquire every identity of one auth key as one indivisible guard.
+
+    A session always has a stable canonical-path identity and, once its file
+    exists, an inode identity as well.  Acquiring both prevents the creation
+    transition from changing locks while retaining protection for hard links.
+    """
+
+    __slots__ = ("_locks", "paths")
+
+    def __init__(self, paths: Iterable[Path]) -> None:
+        unique = tuple(dict.fromkeys(Path(path) for path in paths))
+        if not unique:
+            raise ValueError("at least one session lock path is required")
+        self.paths = unique
+        self._locks: list[SessionLock] = []
+
+    def acquire(self) -> SessionLocks:
+        try:
+            for path in self.paths:
+                self._locks.append(SessionLock(path).acquire())
+        except BaseException:
+            self.release()
+            raise
+        return self
+
+    def release(self) -> None:
+        while self._locks:
+            self._locks.pop().release()
+
+    @property
+    def held(self) -> bool:
+        return bool(self._locks)
+
+    def __enter__(self) -> SessionLocks:
         return self.acquire()
 
     def __exit__(self, *_exc: object) -> None:

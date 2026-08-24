@@ -11,7 +11,7 @@ It is for people who want an AI agent to have a hand on their own Telegram — t
 
 This automates a **personal** Telegram account (MTProto), not a bot account (Bot API). Telegram can limit or permanently ban accounts it judges to be running abusive automation — mass joins, high-volume sends, scraping members. Using this tool against your own account is at your own risk; see [Why not another MTProto wrapper](#why-not-another-mtproto-wrapper) for why a personal account behaves differently from a bot in the first place.
 
-> **Status: pre-alpha (v0.1 in progress).** The CLI and MCP server described in this README are being built from the design in [`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md). Command names and flags may still move before the first tagged release; nothing here claims a capability the design doesn't call for.
+> **Status: v0.1 release candidate.** The repository-side implementation is complete and awaiting the external PyPI/GitHub release setup listed in [`TASKS.md`](TASKS.md). Command names and flags may still move before the first tagged release; deliberate non-goals and accepted local-boundary risks are recorded in [`docs/product-boundaries.md`](docs/product-boundaries.md).
 
 ```bash
 tg-ai account add --label work
@@ -46,7 +46,7 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai inbox` | What's waiting for a reply right now, across every configured account |
 | `tg-ai watch` | Wait for the next incoming message instead of polling for it — a burst of fast replies comes back as one answer, and the wait is capped |
 | `tg-ai search` | Which messages match a phrase, and where — with `--context N`, the messages either side of each match |
-| `tg-ai whois` | Who a `@username`, a numeric id, or an invite link resolves to |
+| `tg-ai whois` | Who a `@username`, numeric id or invite resolves to; for channels, the linked Direct Messages chat id |
 | `tg-ai chat members` | Who's in a chat, and who administers it |
 | `tg-ai media fetch` | Save a message's photo, video or document to a server-controlled path |
 | `tg-ai media transcribe` | Turn a voice message into text — Whisper in an optional container, on your own machine, with the network switched off |
@@ -299,7 +299,7 @@ account itself exactly as before. See
 
 ## MCP tools
 
-Fifty tools: twenty that run immediately, and thirty plan tools — one per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
+The server publishes immediate read/local tools and one typed plan tool per write operation, not a generic `plan_create(operation, params)`, because an untyped `params` doesn't show a model the field schema and it starts inventing argument names. **No tool applies a plan**, and nothing about a plan's state is a tool either: `tg-ai plan list` and `tg-ai plan show <id>` are terminal commands, on the same side of the line as `plan apply`.
 
 ```
 telegram_fleet             telegram_plan_send_message     telegram_plan_join_chat

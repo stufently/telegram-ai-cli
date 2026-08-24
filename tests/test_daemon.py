@@ -120,6 +120,7 @@ def make_daemon(
     idle_timeout: float = 300.0,
     bootstrap_wait: float = 2.0,
     install_signal_handlers: bool = False,
+    max_connections: int = 64,
 ) -> AccountDaemon:
     settings = settings_for(tmp_path)
     daemon_paths.prepare_account_dir(settings, ACCOUNT)
@@ -131,6 +132,7 @@ def make_daemon(
         idle_timeout=idle_timeout,
         bootstrap_wait=bootstrap_wait,
         install_signal_handlers=install_signal_handlers,
+        max_connections=max_connections,
     )
 
 
@@ -368,6 +370,22 @@ async def test_a_slow_request_does_not_block_a_ping(tmp_path: Path) -> None:
         reply = await asyncio.wait_for(daemon_client.ping(live.socket_path), timeout=0.3)
         assert reply["kind"] == "pong"
         await asyncio.wait_for(slow, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_connections_over_the_configured_ceiling_are_refused_busy(tmp_path: Path) -> None:
+    daemon = make_daemon(tmp_path, max_connections=1)
+    async with running(daemon) as live:
+        reader, holder = await asyncio.open_unix_connection(str(live.socket_path))
+        del reader
+        for _ in range(100):
+            if live._connections:
+                break
+            await asyncio.sleep(0.01)
+        with pytest.raises(TelegramAIError, match="connection limit"):
+            await daemon_client.ping(live.socket_path)
+        holder.close()
+        await holder.wait_closed()
 
 
 # --- lifecycle --------------------------------------------------------------

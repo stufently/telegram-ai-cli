@@ -54,6 +54,11 @@ def test_short_number_runs_are_left_alone() -> None:
     assert redact("order 12345678 has 350 items") == "order 12345678 has 350 items"
 
 
+def test_a_negative_telegram_peer_id_is_not_mistaken_for_a_phone() -> None:
+    peer_id = -1001234567890
+    assert redact(f"peer {peer_id} was refused") == f"peer {peer_id} was refused"
+
+
 # --- email -----------------------------------------------------------------
 
 

@@ -31,7 +31,6 @@ precedent and the reasoning is unchanged.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from pydantic import Field
@@ -131,13 +130,13 @@ async def handle_media_transcribe(ctx: OperationContext, params: TranscribeInput
         extra={"message_id": addressed.message_id, "artifact_id": fetched.artifact_id},
     )
     try:
-        transcript = await asyncio.to_thread(
-            engine.transcribe_file, config, audio=fetched.path, language=params.language
+        transcript = await engine.transcribe_file_async(
+            config, audio=fetched.path, language=params.language
         )
     except BaseException as exc:
-        # The container's own words land here and nowhere else: the message the
-        # caller sees is this project's, because `Envelope.failure` has no trust
-        # boundary around it.
+        # The container's own words land here and nowhere else. Failure payloads
+        # are now redacted and defanged too, but arbitrary stderr still must not
+        # be interpolated into prose this project presents as its own.
         ctx.audit.outcome(
             event,
             status="failed",

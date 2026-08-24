@@ -164,8 +164,8 @@ Operation(
 | Тул | Что делает |
 |---|---|
 | `telegram_plan_<operation>` | валидирует и сохраняет намерение. Ничего не отправляет |
-| `telegram_plan_status(plan_id)` | состояние плана |
-| `telegram_plan_list()` | что ждёт решения |
+| `tg-ai plan show <id>` | состояние и точный preview плана; только терминал |
+| `tg-ai plan list` | что ждёт решения; только терминал |
 
 **Отдельный plan-тул на операцию, а не generic `plan_create(operation, params)`.**
 Нетипизированный `params` не показывает модели схему полей, и она начинает выдумывать

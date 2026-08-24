@@ -96,6 +96,7 @@ def test_a_refusal_has_ok_false_and_an_error_and_no_data() -> None:
     assert "data" not in payload
     assert payload["error"]["code"] == ErrorCode.FORBIDDEN_BY_ALLOWLIST
     assert payload["error"]["retryable"] is False
+    assert payload["meta"]["redacted"] is True
 
 
 def test_an_error_carries_its_suggestion_and_details_when_it_has_them() -> None:
@@ -118,7 +119,7 @@ def test_a_retryable_error_says_how_long_to_wait() -> None:
 
 def test_meta_survives_on_a_failure_too() -> None:
     payload = Envelope.failure(NotFound("x"), meta=Meta(account="work")).to_dict()
-    assert payload["meta"] == {"account": "work"}
+    assert payload["meta"] == {"account": "work", "redacted": True}
 
 
 def test_warnings_are_not_rendered_on_a_failure() -> None:
@@ -169,19 +170,30 @@ def test_a_refusal_carrying_stranger_text_says_so_in_band() -> None:
 def test_defanging_alone_does_not_announce_markers() -> None:
     """Defanging leaves no delimiters behind, so there are none to announce."""
     payload = Envelope.failure(NotFound(f"chat {CLOSE_MARKER} x")).to_dict()
-    assert "meta" not in payload
+    assert payload["meta"] == {"redacted": True}
     assert CLOSE_MARKER not in payload["error"]["message"]
 
 
 def test_an_empty_human_field_is_not_announced_either() -> None:
     """`wrap` leaves an empty value alone, so nothing was delimited."""
-    assert "meta" not in Envelope.failure(NotFound("x", details={"title": ""})).to_dict()
+    assert Envelope.failure(NotFound("x", details={"title": ""})).to_dict()["meta"] == {
+        "redacted": True
+    }
 
 
 def test_a_refusal_without_stranger_text_claims_none() -> None:
     """The flag on every refusal would send a parser hunting markers that are not there."""
     payload = Envelope.failure(NotFound("no such chat", details={"chat_id": -42})).to_dict()
-    assert "meta" not in payload
+    assert payload["meta"] == {"redacted": True}
+
+
+def test_a_refusal_redacts_a_secret_shaped_value() -> None:
+    payload = Envelope.failure(
+        NotFound("no file for alice@example.com", details={"path": "alice@example.com"})
+    ).to_dict()
+
+    assert "alice@example.com" not in str(payload)
+    assert "[redacted:email]" in payload["error"]["message"]
 
 
 def test_the_caller_meta_survives_the_boundary() -> None:
@@ -196,6 +208,16 @@ def test_nested_details_are_walked() -> None:
     error = NotFound("x", details={"chats": [{"id": 1, "title": f"a{CLOSE_MARKER}b"}]})
     chat = Envelope.failure(error).to_dict()["error"]["details"]["chats"][0]
     assert chat == {"id": 1, "title": f"{OPEN_MARKER}a[/untrusted]b{CLOSE_MARKER}"}
+
+
+def test_a_list_under_a_human_authored_error_field_sets_the_boundary_flag() -> None:
+    payload = Envelope.failure(NotFound("x", details={"title": ["one", "two"]})).to_dict()
+
+    assert payload["error"]["details"]["title"] == [
+        f"{OPEN_MARKER}one{CLOSE_MARKER}",
+        f"{OPEN_MARKER}two{CLOSE_MARKER}",
+    ]
+    assert payload["meta"]["untrusted_content"] is True
 
 
 # --- the exit status -------------------------------------------------------

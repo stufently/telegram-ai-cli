@@ -115,21 +115,35 @@ class SessionPaths:
 
 
 def auth_key_id(target: Path) -> str:
-    """Stable identity for the artefact holding one auth key.
+    """Stable path identity for the artefact holding one auth key.
 
-    ``realpath`` first, so two labels reaching the same file through a symlink
-    collapse onto one id even before the file exists. Then the inode, so a hard
-    link — which ``realpath`` cannot see through — collapses too. A file that
-    does not exist yet has no key in it, and its canonical path is unique per
-    label, so hashing that path is a correct fallback rather than a compromise.
+    This identity must not change when Telethon creates the session file.  An
+    inode-only identity does exactly that: the first login locks ``path-*``,
+    ``connect()`` creates the file, and a second process then locks ``ino-*``
+    unopposed.  The canonical-path lock is therefore always held.  Existing
+    files also get an inode lock from :func:`auth_key_ids`, preserving the
+    hard-link collision protection.
     """
     real = Path(os.path.realpath(target))
+    digest = hashlib.sha256(str(real).encode("utf-8")).hexdigest()
+    return f"path-{digest[:32]}"
+
+
+def auth_key_ids(target: Path) -> tuple[str, ...]:
+    """Every identity that must be locked for ``target``.
+
+    The path identity closes the absent-to-created transition.  The additional
+    inode identity makes two different hard-link paths converge on the same
+    lock.  Ordering path first is deliberate and shared by every caller.
+    """
+    real = Path(os.path.realpath(target))
+    identities = [auth_key_id(real)]
     try:
         stat = os.stat(real)
     except OSError:
-        digest = hashlib.sha256(str(real).encode("utf-8")).hexdigest()
-        return f"path-{digest[:32]}"
-    return f"ino-{stat.st_dev:x}-{stat.st_ino:x}"
+        return tuple(identities)
+    identities.append(f"ino-{stat.st_dev:x}-{stat.st_ino:x}")
+    return tuple(identities)
 
 
 def lock_target(source: str, session_path: str | None, paths: SessionPaths) -> Path:
@@ -150,6 +164,14 @@ def lock_target(source: str, session_path: str | None, paths: SessionPaths) -> P
 
 
 def session_lock_path(source: str, session_path: str | None, paths: SessionPaths) -> Path:
-    """Absolute path of the lock file guarding this account's auth key."""
+    """Stable primary lock path guarding this account's auth key."""
     target = lock_target(source, session_path, paths)
     return paths.lock_dir / f"{auth_key_id(target)}.lock"
+
+
+def session_lock_paths(
+    source: str, session_path: str | None, paths: SessionPaths
+) -> tuple[Path, ...]:
+    """All lock paths guarding an auth key, including its inode when present."""
+    target = lock_target(source, session_path, paths)
+    return tuple(paths.lock_dir / f"{identity}.lock" for identity in auth_key_ids(target))

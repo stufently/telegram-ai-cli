@@ -67,8 +67,7 @@ def test_the_failure_says_content_protection_rather_than_a_class_name() -> None:
 
 
 def test_the_failure_names_the_chat_by_id_and_never_by_title() -> None:
-    """`Envelope.failure` neither wraps nor defangs untrusted text, and a chat
-    title is written by whoever runs the chat."""
+    """A refusal must not present a stranger-written title as project prose."""
     error = _as_project_error(restriction(), "ChatForwardsRestrictedError: ", a_forward_plan())
 
     assert str(SOURCE_ID) in error.message

@@ -538,8 +538,7 @@ async def test_a_rename_shows_the_old_title_next_to_the_new_one(
 async def test_a_rename_to_the_same_title_is_refused_without_quoting_it(
     tmp_path, client: FakeClient
 ) -> None:
-    """A chat title is written by strangers, and `Envelope.failure` neither
-    wraps nor defangs the text it carries — so a refusal names the chat by id."""
+    """A refusal must not present a stranger-written title as project prose."""
     use(client)
 
     with pytest.raises(InvalidInput) as caught:

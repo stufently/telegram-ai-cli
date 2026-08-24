@@ -666,7 +666,7 @@ def test_the_basic_group_refusal_names_the_chat_by_id() -> None:
     payload = Envelope.failure(caught.value).to_dict()
     assert f"chat {BASIC_GROUP_ID}" in payload["error"]["message"]
     assert "SYSTEM" not in payload["error"]["message"]
-    assert "meta" not in payload
+    assert payload["meta"]["redacted"] is True
 
 
 @pytest.mark.parametrize(

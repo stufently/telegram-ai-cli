@@ -252,9 +252,9 @@ def _refuse_to_repoint(registry: Any, existing: Any, *, replace: bool, kind: str
     pointing at the operator's own file, and a login would write a new one over
     the label instead.
 
-    The message names the label and the source, never a path: it is rendered
-    back to a caller, and a failure envelope neither wraps nor defangs what it
-    quotes.
+    The message names the label and the source, never a path. Failure payloads
+    are redacted and defanged, but a local path is still needless disclosure in
+    project-authored prose.
     """
     own_session = str(registry.paths_for(existing.label).session_file)
     elsewhere = (existing.session_path or own_session) != own_session
@@ -380,6 +380,9 @@ async def handle_account_login_qr(ctx: OperationContext, params: QrLoginInput) -
             box=registry.store.box,
             display=partial(show_qr, invert=params.invert),
             replace=params.replace or existing is not None,
+            # Row replacement is needed for the normal add-then-login flow;
+            # identity replacement still requires the operator's explicit flag.
+            allow_identity_change=params.replace,
         )
     except TelegramAIError as exc:
         # The code, not the message, exactly as the phone login records it.

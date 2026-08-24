@@ -220,6 +220,52 @@ class AccountStore:
             )
         return self.require(name)
 
+    def restore(self, record: AccountRecord) -> AccountRecord:
+        """Put a previously read row back byte-for-byte.
+
+        Login replacement is staged under the session lock.  If authorisation
+        fails, the old registration must come back with its original encrypted
+        values, status and creation time; feeding those values through
+        :meth:`upsert` would both re-encrypt ciphertext and reset identity
+        fields.  This deliberately accepts only an :class:`AccountRecord`
+        returned by this store.
+        """
+        name = sanitize_label(record.label)
+        with immediate(self._conn) as conn:
+            conn.execute(
+                """
+                INSERT INTO accounts
+                    (label, source, session_path, phone, api_id, api_hash, proxy_url,
+                     status, user_id, last_error, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(label) DO UPDATE SET
+                    source = excluded.source,
+                    session_path = excluded.session_path,
+                    phone = excluded.phone,
+                    api_id = excluded.api_id,
+                    api_hash = excluded.api_hash,
+                    proxy_url = excluded.proxy_url,
+                    status = excluded.status,
+                    user_id = excluded.user_id,
+                    last_error = excluded.last_error,
+                    created_at = excluded.created_at
+                """,
+                (
+                    name,
+                    str(record.source),
+                    record.session_path,
+                    record.phone,
+                    record.api_id,
+                    record.api_hash,
+                    record.proxy_url,
+                    str(record.status),
+                    record.user_id,
+                    record.last_error,
+                    record.created_at,
+                ),
+            )
+        return self.require(name)
+
     def set_status(self, label: str, status: AccountStatus, last_error: str | None = None) -> None:
         self._conn.execute(
             "UPDATE accounts SET status = ?, last_error = ? WHERE label = ?",

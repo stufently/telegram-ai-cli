@@ -582,20 +582,22 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
 
         case "message.forward":
             require_planning_profile(ctx, Capability.SEND, action=action)
-            source = await resolve_peer(client, params.source_chat)  # type: ignore[attr-defined]
+            source, ids = await resolve_message_ids(
+                ctx,
+                client,
+                chat=params.source_chat,  # type: ignore[attr-defined]
+                message_ids=params.message_ids,  # type: ignore[attr-defined]
+                capability=Capability.READ_CHAT,
+                action=action,
+            )
             destination = await resolve_peer(
                 client,
                 params.destination_chat,  # type: ignore[attr-defined]
             )
-            require_peer(ctx, Capability.READ_CHAT, source.ref, action=action)
             require_peer(ctx, Capability.SEND, destination.ref, action=action)
             warnings += _check_peer(pre["source"], source, what="source chat")
             warnings += _check_peer(pre["destination"], destination, what="destination chat")
-            messages = await _fetch_messages(
-                client,
-                source,
-                list(params.message_ids),  # type: ignore[attr-defined]
-            )
+            messages = await _fetch_messages(client, source, ids)
             _check_messages(pre["messages"], messages)
             return _Prepared(
                 limit_target=str(destination.ref.peer_id),
@@ -603,6 +605,7 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
                 messages=messages,
                 audit_peer_id=destination.ref.peer_id,
                 warnings=warnings,
+                message_ids=ids,
             )
 
         case "chat.join":
@@ -981,7 +984,7 @@ async def _execute(
         case "message.forward":
             sent = await client.forward_messages(
                 prepared.peers["destination"].ref.peer_id,
-                list(params.message_ids),  # type: ignore[attr-defined]
+                list(prepared.message_ids),
                 prepared.peers["source"].ref.peer_id,
                 silent=params.silent,  # type: ignore[attr-defined]
                 drop_author=params.drop_author,  # type: ignore[attr-defined]
@@ -1595,7 +1598,7 @@ def _outbound_fingerprint(plan: Any, params: BaseModel, prepared: _Prepared | An
         # with them, which is the difference between a quotation and an
         # anonymous one.
         extra["source_peer_id"] = plan.preconditions.get("source", {}).get("peer_id")
-        extra["message_ids"] = sorted(int(one) for one in params.message_ids)  # type: ignore[attr-defined]
+        extra["message_ids"] = sorted(int(one) for one in prepared.message_ids)
         extra["drop_author"] = bool(getattr(params, "drop_author", False))
 
     attachment = getattr(prepared, "attachment", None)

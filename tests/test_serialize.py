@@ -12,7 +12,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from telegram_ai_cli.ops._serialize import ReadPointers, message_summary, reactions_summary
+from telegram_ai_cli.ops._serialize import (
+    ReadPointers,
+    message_summary,
+    peer_summary,
+    reactions_summary,
+)
 from telegram_ai_cli.safety import PeerKind, PeerRef
 
 GROUP = PeerRef(peer_id=-1001234567890, kind=PeerKind.GROUP, username=None, title="Marketing")
@@ -75,6 +80,40 @@ class FakeMessage:
 
 
 # --- reactions -------------------------------------------------------------
+
+
+def test_a_channel_surfaces_its_linked_direct_messages_chat_as_a_usable_id() -> None:
+    from telethon import utils
+    from telethon.tl.types import Channel, PeerChannel
+
+    channel = Channel(
+        id=42,
+        title="News",
+        photo=None,
+        date=None,
+        broadcast=True,
+        megagroup=False,
+        linked_monoforum_id=84,
+    )
+
+    assert peer_summary(channel)["linked_monoforum_id"] == utils.get_peer_id(PeerChannel(84))
+
+
+def test_media_without_an_id_is_fingerprinted_by_its_content() -> None:
+    from telegram_ai_cli.ops._serialize import media_fingerprint
+
+    @dataclass
+    class Location:
+        latitude: float
+        longitude: float
+
+    first = FakeMessage(media=Location(1.25, 2.5))
+    same = FakeMessage(media=Location(1.25, 2.5))
+    other = FakeMessage(media=Location(9.0, 2.5))
+
+    assert media_fingerprint(first) == media_fingerprint(same)
+    assert media_fingerprint(first) != media_fingerprint(other)
+    assert "opaque_sha256" in media_fingerprint(first)["parts"]
 
 
 def test_a_message_without_reactions_reports_none_rather_than_an_empty_list() -> None:

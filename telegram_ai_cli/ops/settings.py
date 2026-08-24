@@ -273,8 +273,9 @@ def require_person(user: Resolved, *, action: str) -> None:
 
     A chat id here is somebody reaching for ``chat.ban`` and getting a different
     effect, and Telegram would take the request. Named by id rather than by
-    title for the same reason as everywhere else in this module: an error
-    envelope is outside the wrapper that marks stranger-written text as data.
+    title for the same reason as everywhere else in this module: the failure
+    boundary defangs project-authored prose but does not label an interpolated
+    title as a separate stranger-written value.
     """
     if user.ref.kind is PeerKind.USER:
         return
@@ -293,8 +294,8 @@ def require_chat_peer(chat: Resolved, *, action: str) -> None:
     Without this a user id plans happily and fails at apply time with an
     ``AttributeError`` from inside Telethon — an approved plan that was never
     applicable, discovered at the one moment nothing can be done about it. The
-    peer is named by id: this message is assembled into an error envelope, which
-    is outside the wrapper that marks stranger-written text as data.
+    peer is named by id: the failure boundary defangs project-authored prose but
+    does not label an interpolated title as a separate stranger-written value.
     """
     if chat.ref.kind in CHAT_KINDS:
         return
@@ -331,9 +332,9 @@ async def plan_set_chat_title(ctx: OperationContext, params: BaseModel) -> Plan:
 
     current = chat.ref.title or ""
     if current == p.title:
-        # Named by id, never by title: this message is assembled into an error
-        # envelope, which is outside the wrapper that marks stranger-written
-        # text as data. Quoting the title here would hand it over unmarked.
+        # Named by id, never by title: the failure boundary defangs the sentence
+        # but does not label an interpolated title as a separate stranger-written
+        # value. Quoting the title here would still present it as our own prose.
         raise InvalidInput(f"chat {chat.ref.peer_id} already has that title; nothing would change")
 
     summary = (

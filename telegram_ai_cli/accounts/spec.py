@@ -21,9 +21,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
-from .lock import SessionLock
+from .lock import SessionLocks
 from .models import AccountSource
-from .paths import SessionPaths, session_lock_path
+from .paths import SessionPaths, session_lock_paths
 from .proxy import (
     NO_PROXY_WARNING,
     mask_secret,
@@ -89,8 +89,8 @@ class AccountSpec:
     def paths(self, sessions_dir: Path) -> SessionPaths:
         return SessionPaths(Path(sessions_dir), self.label)
 
-    def lock_path(self, sessions_dir: Path) -> Path:
-        return session_lock_path(str(self.source), self.session_path, self.paths(sessions_dir))
+    def lock_paths(self, sessions_dir: Path) -> tuple[Path, ...]:
+        return session_lock_paths(str(self.source), self.session_path, self.paths(sessions_dir))
 
     def secrets(self) -> tuple[str | None, ...]:
         """Literal values that must never reach a log line or ``last_error``."""
@@ -110,7 +110,7 @@ class LoadedClient:
     client: TelegramClient
     spec: AccountSpec
     paths: SessionPaths
-    lock: SessionLock | None = None
+    lock: SessionLocks | None = None
     user_id: int | None = None
 
     async def close(self) -> None:

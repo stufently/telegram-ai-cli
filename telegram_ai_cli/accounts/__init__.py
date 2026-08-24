@@ -39,7 +39,7 @@ from .fs import (
     write_private_text,
 )
 from .loader import build_client, load_account
-from .lock import SessionLock
+from .lock import SessionLock, SessionLocks
 from .login import (
     LoginResult,
     interactive_login,
@@ -48,7 +48,14 @@ from .login import (
     qr_login_and_register,
 )
 from .models import USABLE_STATUSES, AccountSource, AccountStatus
-from .paths import SessionPaths, auth_key_id, sanitize_label, session_lock_path
+from .paths import (
+    SessionPaths,
+    auth_key_id,
+    auth_key_ids,
+    sanitize_label,
+    session_lock_path,
+    session_lock_paths,
+)
 from .proxy import mask_secret, parse_proxy_url, redact_proxy_url, redact_secrets
 from .registry import AccountRegistry
 from .runtime import recoverable_errors, revoked_errors, telethon_options
@@ -72,8 +79,10 @@ __all__ = [
     "LoginResult",
     "SessionFlag",
     "SessionLock",
+    "SessionLocks",
     "SessionPaths",
     "auth_key_id",
+    "auth_key_ids",
     "build_client",
     "discover_tdata_dirs",
     "ensure_private_dir",
@@ -101,6 +110,7 @@ __all__ = [
     "sanitize_label",
     "save_api_profile",
     "session_lock_path",
+    "session_lock_paths",
     "telethon_options",
     "write_private_text",
 ]

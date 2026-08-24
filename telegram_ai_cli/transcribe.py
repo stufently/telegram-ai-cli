@@ -39,15 +39,16 @@ CPU and memory the timeout existed to reclaim. So the run is named, and the
 timeout path removes it by that name.
 
 **Nothing the container prints reaches the caller as an error message.**
-``Envelope.failure`` neither wraps untrusted text nor defangs it, so an error
-string is the one value in a response with no trust boundary around it. Container
-output is attached to the exception in an attribute the envelope never
-serialises, read only by :func:`container_detail` on its way to the audit log,
-where a person debugging a broken image can find it.
+The failure envelope redacts and defangs what it serialises, but arbitrary
+container output still does not belong in project-authored diagnostic prose.
+It is attached to the exception in an attribute the envelope never serialises,
+read only by :func:`container_detail` on its way to the audit log, where a
+person debugging a broken image can find it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -345,7 +346,85 @@ def transcribe_file(
             retry_after=1,
         ) from exc
 
-    if completed.returncode == EXIT_MODEL_MISSING:
+    return _result_from_process(
+        config,
+        returncode=completed.returncode,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+async def transcribe_file_async(
+    config: TranscribeConfig,
+    *,
+    audio: Path,
+    language: str | None,
+) -> Transcript:
+    """Cancellation-safe asynchronous variant used by MCP and the CLI.
+
+    Image inspection stays in a worker thread because it never creates a
+    container and is independently bounded to 30 seconds. The long-running
+    ``docker run`` process is owned by the event loop: on timeout or caller
+    cancellation we stop that client, wait for it to settle, and only then
+    remove the named container. Waiting before ``rm`` closes the creation race
+    where cleanup could run just before Docker registered the container.
+    """
+    if not config.model_cache.is_dir():
+        raise TranscriberUnavailable(
+            f"the model cache {config.model_cache} does not exist",
+            suggestion=(
+                "Download the model once with `make transcribe-model`. It is a separate "
+                "step because transcription itself runs with no network."
+            ),
+        )
+    if not await asyncio.to_thread(_image_present, config):
+        raise _missing_image_error(config)
+
+    name = container_name()
+    command = build_run_command(
+        config, audio=audio, language=language, run_as=resolve_run_as(config), name=name
+    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - inspect normally catches it
+        raise TranscriberUnavailable(
+            f"transcription needs Docker, and {config.docker_binary!r} is not on PATH"
+        ) from exc
+
+    try:
+        async with asyncio.timeout(config.timeout_seconds):
+            stdout_bytes, stderr_bytes = await process.communicate()
+    except asyncio.CancelledError:
+        await _stop_process(process)
+        await force_remove_async(config, name)
+        raise
+    except TimeoutError as exc:
+        await _stop_process(process)
+        await force_remove_async(config, name)
+        raise TranscriptionFailed(
+            "the transcriber exceeded transcribe.timeout_seconds "
+            f"({config.timeout_seconds}s) and was stopped",
+            suggestion="Retry, or raise transcribe.timeout_seconds for audio this long.",
+            retry_after=1,
+        ) from exc
+
+    return _result_from_process(
+        config,
+        returncode=int(process.returncode or 0),
+        stdout=stdout_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr_bytes.decode("utf-8", errors="replace"),
+    )
+
+
+def _result_from_process(
+    config: TranscribeConfig, *, returncode: int, stdout: str, stderr: str
+) -> Transcript:
+    """Map either subprocess implementation onto the public result/errors."""
+    if returncode == EXIT_MODEL_MISSING:
         raise TranscriberUnavailable(
             f"the {MODEL_SIZE} Whisper model is not in transcribe.model_cache",
             suggestion=(
@@ -353,7 +432,7 @@ def transcribe_file(
                 "because transcription itself runs with no network."
             ),
         )
-    if completed.returncode == EXIT_AUDIO_TOO_LONG:
+    if returncode == EXIT_AUDIO_TOO_LONG:
         # Not `TranscriptionFailed`: that class is retryable, and the same file
         # will be too long every time — a retry would only download it again.
         # This is the host-side ceiling's own error, reached by the check that
@@ -362,18 +441,18 @@ def transcribe_file(
             f"the audio is longer than transcribe.max_audio_seconds ({config.max_audio_seconds}s)",
             suggestion="Raise transcribe.max_audio_seconds if audio this long is genuinely wanted.",
         )
-    if completed.returncode != 0:
+    if returncode != 0:
         # No stderr in the *message*: see the module docstring. It is attached to
         # the exception instead, where only `container_detail` — the audit path —
         # reads it.
         failure = TranscriptionFailed(
-            f"the transcriber exited with status {completed.returncode}",
+            f"the transcriber exited with status {returncode}",
             suggestion="The container's own output is in the audit log for this operation.",
         )
-        failure.container_output = completed.stderr  # type: ignore[attr-defined]
+        failure.container_output = stderr  # type: ignore[attr-defined]
         raise failure
 
-    return _parse(completed.stdout)
+    return _parse(stdout)
 
 
 def force_remove(config: TranscribeConfig, name: str) -> None:
@@ -391,6 +470,44 @@ def force_remove(config: TranscribeConfig, name: str) -> None:
             timeout=30,
             check=False,
         )
+    except (OSError, subprocess.SubprocessError):
+        return
+
+
+async def _stop_process(process: asyncio.subprocess.Process) -> None:
+    """Stop a Docker client and wait until it can no longer create a container."""
+    if process.returncode is not None:
+        return
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except TimeoutError:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        await process.wait()
+
+
+async def force_remove_async(config: TranscribeConfig, name: str) -> None:
+    """Asynchronous best-effort counterpart to :func:`force_remove`."""
+    try:
+        cleanup = await asyncio.create_subprocess_exec(
+            config.docker_binary,
+            "rm",
+            "-f",
+            name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(cleanup.wait(), timeout=30)
+        except TimeoutError:
+            cleanup.kill()
+            await cleanup.wait()
     except (OSError, subprocess.SubprocessError):
         return
 

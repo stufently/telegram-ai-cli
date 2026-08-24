@@ -150,13 +150,30 @@ def has_untrusted_field(value: Any) -> bool:
     """
     if isinstance(value, dict):
         return any(
-            (key in UNTRUSTED_FIELDS and isinstance(item, str) and bool(item))
-            or has_untrusted_field(item)
+            (key in UNTRUSTED_FIELDS and _has_named_content(item)) or has_untrusted_field(item)
             for key, item in value.items()
         )
     if isinstance(value, list):
         return any(has_untrusted_field(item) for item in value)
     return False
+
+
+def _has_named_content(value: Any) -> bool:
+    """Whether a human-authored field contains any string that will be framed."""
+    if isinstance(value, str):
+        return bool(value)
+    if isinstance(value, list):
+        return any(_has_named_content(item) for item in value)
+    return False
+
+
+def _wrap_named(value: Any) -> Any:
+    """Frame strings below a field whose name declares human authorship."""
+    if isinstance(value, str):
+        return wrap(value)
+    if isinstance(value, list):
+        return [_wrap_named(item) for item in value]
+    return wrap_untrusted(value)
 
 
 def wrap_untrusted(value: Any) -> Any:
@@ -177,9 +194,7 @@ def wrap_untrusted(value: Any) -> Any:
     """
     if isinstance(value, dict):
         return {
-            key: wrap(item)
-            if key in UNTRUSTED_FIELDS and isinstance(item, str)
-            else wrap_untrusted(item)
+            key: _wrap_named(item) if key in UNTRUSTED_FIELDS else wrap_untrusted(item)
             for key, item in value.items()
         }
     if isinstance(value, list):

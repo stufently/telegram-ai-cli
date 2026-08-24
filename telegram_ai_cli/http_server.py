@@ -43,6 +43,9 @@ import contextlib
 import hmac
 import ipaddress
 import logging
+import math
+import time
+from collections import deque
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -54,6 +57,8 @@ log = logging.getLogger(__name__)
 
 #: What an unauthenticated caller is told. Deliberately nothing.
 _UNAUTHORIZED_BODY = b"Unauthorized"
+_TOO_LARGE_BODY = b"Request body too large"
+_RATE_LIMITED_BODY = b"Too Many Requests"
 
 
 def require_loopback(host: str) -> str:
@@ -194,6 +199,89 @@ class BearerAuth:
         await send({"type": "http.response.body", "body": _UNAUTHORIZED_BODY})
 
 
+class RequestGuard:
+    """Bound authenticated HTTP request size and arrival rate before the SDK."""
+
+    def __init__(self, app: Any, *, max_body_bytes: int, requests_per_minute: int) -> None:
+        self._app = app
+        self._max_body_bytes = int(max_body_bytes)
+        self._requests_per_minute = int(requests_per_minute)
+        self._arrivals: deque[float] = deque()
+        self._rate_lock: Any = None
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self._app(scope, receive, send)
+            return
+
+        allowed, retry_after = await self._accept_arrival()
+        if not allowed:
+            await _plain_response(
+                send,
+                status=429,
+                body=_RATE_LIMITED_BODY,
+                headers=[(b"retry-after", str(retry_after).encode())],
+            )
+            return
+
+        declared = self._content_length(scope)
+        if declared is not None and declared > self._max_body_bytes:
+            await _plain_response(send, status=413, body=_TOO_LARGE_BODY)
+            return
+
+        if scope.get("method", "GET").upper() not in {"POST", "PUT", "PATCH"}:
+            await self._app(scope, receive, send)
+            return
+
+        buffered: list[dict[str, Any]] = []
+        size = 0
+        while True:
+            message = await receive()
+            buffered.append(message)
+            if message.get("type") != "http.request":
+                break
+            size += len(message.get("body", b""))
+            if size > self._max_body_bytes:
+                await _plain_response(send, status=413, body=_TOO_LARGE_BODY)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay() -> dict[str, Any]:
+            if buffered:
+                return buffered.pop(0)
+            return await receive()
+
+        await self._app(scope, replay, send)
+
+    async def _accept_arrival(self) -> tuple[bool, int]:
+        import asyncio
+
+        if self._rate_lock is None:
+            self._rate_lock = asyncio.Lock()
+        async with self._rate_lock:
+            now = time.monotonic()
+            cutoff = now - 60.0
+            while self._arrivals and self._arrivals[0] <= cutoff:
+                self._arrivals.popleft()
+            if len(self._arrivals) >= self._requests_per_minute:
+                retry = max(1, math.ceil(self._arrivals[0] + 60.0 - now))
+                return False, retry
+            self._arrivals.append(now)
+            return True, 0
+
+    def _content_length(self, scope: Any) -> int | None:
+        for name, value in scope.get("headers") or []:
+            if name.lower() != b"content-length":
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return None
+            return max(0, parsed)
+        return None
+
+
 def build_http_app(
     *,
     config: HTTPConfig | None = None,
@@ -246,7 +334,30 @@ def build_http_app(
         await manager.handle_request(scope, receive, send)
 
     inner = Starlette(routes=[Mount("", app=handle)], lifespan=lifespan)
-    return BearerAuth(inner, token=token)
+    guarded = RequestGuard(
+        inner,
+        max_body_bytes=config.max_request_body_bytes,
+        requests_per_minute=config.requests_per_minute,
+    )
+    return BearerAuth(guarded, token=token)
+
+
+async def _plain_response(
+    send: Any,
+    *,
+    status: int,
+    body: bytes,
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> None:
+    response_headers = list(headers or [])
+    response_headers.extend(
+        [
+            (b"content-type", b"text/plain; charset=utf-8"),
+            (b"content-length", str(len(body)).encode()),
+        ]
+    )
+    await send({"type": "http.response.start", "status": status, "headers": response_headers})
+    await send({"type": "http.response.body", "body": body})
 
 
 async def _not_found(send: Any) -> None:

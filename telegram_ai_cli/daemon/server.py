@@ -111,6 +111,7 @@ class AccountDaemon:
         bootstrap_lock_path: Path,
         session: DaemonSession,
         idle_timeout: float = 300.0,
+        max_connections: int = 64,
         bootstrap_wait: float = 5.0,
         install_signal_handlers: bool = True,
     ) -> None:
@@ -119,6 +120,7 @@ class AccountDaemon:
         self.bootstrap_lock_path = Path(bootstrap_lock_path)
         self.session = session
         self.idle_timeout = float(idle_timeout)
+        self.max_connections = int(max_connections)
         self.bootstrap_wait = float(bootstrap_wait)
         self.install_signal_handlers = install_signal_handlers
 
@@ -358,6 +360,22 @@ class AccountDaemon:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         task = asyncio.current_task()
+        if len(self._connections) >= self.max_connections:
+            with contextlib.suppress(Exception):
+                await write_frame(
+                    writer,
+                    error_response(
+                        SessionLocked(
+                            f"account {self.account}: daemon connection limit reached",
+                            suggestion="Retry after another local caller disconnects.",
+                            retry_after=1,
+                        )
+                    ),
+                )
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            return
         if task is not None:
             self._connections.add(task)
         try:
@@ -427,6 +445,7 @@ class AccountDaemon:
                     "account": self.account,
                     "pid": os.getpid(),
                     "idle_timeout": self.idle_timeout,
+                    "max_connections": self.max_connections,
                 }
             )
         if action != "run":

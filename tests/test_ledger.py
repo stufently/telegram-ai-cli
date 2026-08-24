@@ -486,8 +486,7 @@ async def test_the_refusal_names_when_it_happened_and_which_plan_did_it(
 
 
 async def test_the_refusal_quotes_no_chat_title(tmp_path: Path, client: FakeClient) -> None:
-    """`Envelope.failure` neither wraps nor defangs untrusted text, so the chat
-    is named by the one part of it a stranger cannot choose."""
+    """The refusal names a chat by the one part a stranger cannot choose."""
     ctx = context(tmp_path)
     first = await plan_a_message(ctx)
     second = await plan_a_message(ctx)

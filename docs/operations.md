@@ -402,6 +402,9 @@ for all of its threads. Capability: `read_chat`. Nothing is acknowledged.
 | `chat` | string | **required** | Chat id, `@username`, or `t.me` link of a forum |
 | `limit` | int 1–500 | `50` | Topics to return |
 | `search` | string | — | Only topics whose title matches (Telegram does the matching) |
+| `offset_date` | ISO timestamp | — | Date from the previous page's `next_cursor` |
+| `offset_id` | int | `0` | Top-message id from the same cursor |
+| `offset_topic` | int | `0` | Topic id from the same cursor |
 
 **A chat that is not a forum is refused, not answered with `[]`.** "No topics"
 and "topics are not a thing here" lead to different next steps, and the empty
@@ -429,9 +432,10 @@ is gone, and a missing row looks like the end of a page. The draft Telegram
 attaches to a topic is deliberately **not** serialized — it is text this account
 typed and never sent, and a listing is not the place to disclose it.
 
-Only the first page is served. Telegram's cursor for topics is a triple
-(`offset_date`, `offset_id`, `offset_topic`) read off the last row; past `limit`
-the answer says `truncated` rather than pretending the forum is smaller.
+Topic pages return `next_cursor`, Telegram's cursor triple (`offset_date`,
+`offset_id`, `offset_topic`) read off the last concrete row. Pass all three back
+together; a partial cursor is refused. Past `limit` the answer says `truncated`
+rather than pretending the forum is smaller.
 
 ### `telegram_chat_members` — `tg-ai chat members`
 
@@ -496,12 +500,15 @@ peer) **per chat** before its messages are fetched.
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `account` | string | — | Which account to use; omit to sweep all of them |
+| `account` | string | — | Which account to use; omit to sweep all of them unless `chat` narrows the call |
 | `limit` | int 1–500 | `20` | Conversations to fetch and return |
 | `per_chat` | int 1–100 | `10` | Messages to fetch per chat, for each of mentions and reactions |
 | `include_mentions` | bool | `true` | Include unread mentions and replies |
 | `include_reactions` | bool | `true` | Include unread reactions to this account's own messages |
 | `include_private` | bool | `false` | Include one-to-one conversations (needs `safety.read.enumerate_dms`) |
+| `chat` | string | — | Read only this chat id, username or link, without enumerating dialogs |
+| `offset_id` | int ≥ 0 | `0` | In a scoped call, return entries older than this message id |
+| `topic_id` | int ≥ 1 | — | In a scoped forum call, filter one topic; a topic link can supply it |
 
 Each row: `account`, `chat` (the usual peer summary), `unread_mentions`,
 `unread_reactions`, `mentions` (message rows in the standard message shape) and
@@ -533,6 +540,10 @@ message** plus `reactors`:
   open is counted in a `withheld` warning and never fetched either.
 - `total` is every chat that had something, including the ones past the cut, so
   a short list is never mistaken for "that is all there is".
+- A scoped response carries `next_offset_id.mentions` and
+  `next_offset_id.reactions`. Each is either the cursor for another page or
+  `null`; select one stream when advancing its cursor so differently sized
+  mention and reaction histories cannot make the other skip.
 
 ### `telegram_watch` — `tg-ai watch`
 
@@ -680,6 +691,12 @@ as "there were none".
 Identity only: id, kind, handle, bot flag, and — for users — the groups this
 account shares with them. No peer capability, because it returns no chat
 content; the hard denylist still applies.
+
+For a channel with Telegram Direct Messages enabled, the identity also carries
+`linked_monoforum_id`: the marked chat id accepted directly by `chat read` and
+write plans. This discovers the administration inbox without a separate raw
+Telegram lookup; addressing a per-user topic inside one's own monoforum is not
+yet supported.
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -883,9 +900,10 @@ wrote. So `transcript` is in `UNTRUSTED_FIELDS` and crosses the same boundary as
 a message body: delimited, and defanged so a speaker who pronounces the marker
 cannot close the frame around their own words.
 
-**Nothing the container prints appears in an error message.** `Envelope.failure`
-neither wraps untrusted text nor defangs it, so the container's own output goes
-to the audit log and the caller sees this project's words plus an exit status.
+**Nothing the container prints appears in an error message.** Failure payloads
+are redacted and defanged, but arbitrary container output still does not belong
+in project-authored diagnostic prose. It goes to the audit log; the caller sees
+this project's words plus an exit status.
 
 **The length ceiling is checked twice.** `transcribe.max_audio_seconds` is
 applied first to the duration Telegram reported — which saves the whole transfer
@@ -1121,7 +1139,7 @@ and all require the `plan` profile: under `readonly` every one of them refuses.
 | `message.send_file` | `tg-ai message send-file` | `telegram_plan_send_file` | `send` | `chat`\*, `path`\*, `caption`="", `reply_to_message_id`, `as_document`=false, `silent`=false, `allow_duplicate`=false |
 | `message.edit` | `tg-ai message edit` | `telegram_plan_edit_message` | `send` | `chat`\*, `message_id` (or a `t.me` link as `chat`), `text`\* |
 | `message.delete` | `tg-ai message delete` | `telegram_plan_delete_message` | `send` | `chat`\*, `message_ids` (list; or a `t.me` link as `chat`, naming one), `revoke`=true |
-| `message.forward` | `tg-ai message forward` | `telegram_plan_forward_message` | `send` | `source_chat`\*, `message_ids`\*, `destination_chat`\*, `silent`=false, `drop_author`=false, `allow_duplicate`=false |
+| `message.forward` | `tg-ai message forward` | `telegram_plan_forward_message` | `send` | `source_chat`\* (may be a one-message link), `message_ids` (omit for a link), `destination_chat`\*, `silent`=false, `drop_author`=false, `allow_duplicate`=false |
 | `message.schedule` | `tg-ai message schedule` | `telegram_plan_schedule_message` | `send` | `chat`\*, `text`\*, `at` (ISO-8601 **with** a UTC offset) *or* `when_online`=false, `silent`=false, `link_preview`=true |
 | `chat.mark_read` | `tg-ai chat mark-read` | `telegram_plan_mark_read` | `send` | `chat`\*, `max_message_id` |
 | `chat.archive` | `tg-ai chat archive` | `telegram_plan_archive_chat` | `send` | `chat`\*, `archived`=true |
@@ -1757,6 +1775,9 @@ is one connection, and overlapping requests on it are the thing the lock on disk
 exists to prevent. Accepting and framing are not: each connection is handled in
 its own task, so a slow operation delays the operations behind it and blocks
 nothing else, and `tg-ai daemon status` answers during a five-minute watch.
+At most `daemon.max_connections` peers may be framing or waiting at once; an
+excess local caller receives a retryable busy refusal instead of allocating an
+unbounded task for 30 seconds.
 
 ---
 
@@ -1784,3 +1805,6 @@ localhost" mode, are in [Configuration](configuration.md#http).
 
 The tool surface is identical to stdio's. A transport does not widen anything:
 the same operations, the same policy, and still no tool that applies a plan.
+Authenticated arrivals are additionally bounded by
+`http.requests_per_minute`, and request bodies larger than
+`http.max_request_body_bytes` are rejected before the MCP SDK parses them.

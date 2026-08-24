@@ -28,6 +28,7 @@ from telethon import utils
 from telethon.tl import types as tl
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 
+import telegram_ai_cli.ops.inbox as inbox_ops
 from telegram_ai_cli.errors import InvalidInput, NotAllowlisted
 from telegram_ai_cli.ops.chats import ChatReadInput, handle_chat_read
 from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
@@ -294,6 +295,44 @@ async def test_the_inbox_counts_an_unreadable_chat_without_quoting_it(
     assert rows[FRIEND_ID]["preview"] is None
     assert "door code" not in str(envelope.data)
     assert any("1 preview(s) withheld" in one for one in envelope.warnings)
+
+
+@pytest.mark.asyncio
+async def test_inbox_totals_count_only_accounts_that_were_read(
+    make_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partial fleet answer must name the population its totals came from."""
+    ctx = make_context(FakeClient())
+    monkeypatch.setattr(inbox_ops, "visible_labels", lambda _ctx: ["one", "broken", "three"])
+
+    async def sweep(_ctx: Any, label: str, _params: InboxInput):
+        if label == "broken":
+            raise RuntimeError("offline")
+        return [], 0, 0
+
+    monkeypatch.setattr(inbox_ops, "_sweep_account", sweep)
+
+    envelope = await handle_inbox(ctx, InboxInput())
+
+    assert envelope.data["totals"]["accounts"] == 2
+    assert envelope.data["totals"]["accounts_attempted"] == 3
+    assert envelope.data["totals"]["accounts_failed"] == 1
+    assert any("broken: RuntimeError" in warning for warning in envelope.warnings)
+
+
+@pytest.mark.asyncio
+async def test_a_named_inbox_account_failure_is_not_reported_as_an_empty_success(
+    make_context: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = make_context(FakeClient())
+
+    async def fail(_ctx: Any, _label: str, _params: InboxInput):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(inbox_ops, "_sweep_account", fail)
+
+    with pytest.raises(RuntimeError, match="offline"):
+        await handle_inbox(ctx, InboxInput(account="work"))
 
 
 @pytest.mark.asyncio
