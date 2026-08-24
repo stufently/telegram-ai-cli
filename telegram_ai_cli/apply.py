@@ -428,6 +428,7 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
         _fetch_messages,
         require_peer,
         require_planning_profile,
+        resolve_chat_argument,
         resolve_join_target,
         resolve_message_ids,
         resolve_message_target,
@@ -496,7 +497,12 @@ async def _verify(ctx: OperationContext, client: Any, plan: Plan, params: BaseMo
             from .ops.folders import load_folders, resolve_folder
 
             require_planning_profile(ctx, Capability.SEND, action=action)
-            chat = await resolve_peer(client, params.chat)  # type: ignore[attr-defined]
+            # The same resolver the planner used, and for the same reason: this
+            # field accepts a `t.me` link, and Telethon cannot resolve one that
+            # names a message. Verifying with the plain resolver would refuse
+            # every plan written from a link — after a person had approved it,
+            # which is the worst moment to discover it.
+            chat, _link = await resolve_chat_argument(client, params.chat)  # type: ignore[attr-defined]
             require_peer(ctx, Capability.SEND, chat.ref, action=action)
             warnings += _check_peer(pre["peer"], chat, what="chat")
             view = resolve_folder(

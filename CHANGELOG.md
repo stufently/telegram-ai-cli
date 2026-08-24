@@ -1035,6 +1035,38 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **`folder add` could never have run.** `plan_folder_add` calls
+  `resolve_chat_argument` — the resolver that understands a `t.me` link — while
+  the import beside it named `resolve_peer`, so every invocation that got as far
+  as resolving the chat ended in `NameError`. The whole suite of 1247 tests
+  stayed green because not one of them had ever *called* the planner:
+  `tests/test_folders.py` drove its pure helpers, which are the parts that were
+  right. Only ruff saw it, as F821 plus an unused import. The planner is now
+  driven end to end — the summary it writes, the folder id it pins into the
+  preconditions, the chat a folder already names, and the three refusals
+  (shareable folder, excluded chat, a chat outside the write policy) — and five
+  of those tests fail with the original `NameError` on the original import. The
+  read fake grew a `get_entity` for it, unset by default, so a read handler that
+  starts resolving entities still fails rather than being answered by something
+  irrelevant.
+
+- **A `folder add` plan written from a `t.me` link could not be applied.** The
+  planner normalises `https://t.me/name/412` to the chat it names, and stores
+  the argument as typed — but verification handed that same string to the plain
+  resolver, which Telethon cannot resolve because it names a message. So a plan
+  was created, reviewed, approved, and *then* refused. Both sides use
+  `resolve_chat_argument` now. Found while closing the coverage hole above and
+  confirmed by two independent reviews; the test asserts on the argument handed
+  to Telethon rather than on the answer, because a fake resolves what the real
+  client will not.
+
+- **A chat outside the write policy no longer costs a second request.**
+  `plan_folder_add` fetched the account's folders before asking the safety
+  kernel whether the chat could be touched at all, so a refused peer still
+  issued `GetDialogFilters` — and a mistyped folder answered "no such folder" to
+  a caller who was never allowed near the chat. The check now happens as soon as
+  the peer is known, which is the order the read handlers already follow.
+
 - **`chat members` no longer crashes on a supergroup.** Without `--search` the
   handler passed Telethon `search=None`, which for a channel or supergroup goes
   straight into `ChannelParticipantsSearch.q` and dies in the serializer with

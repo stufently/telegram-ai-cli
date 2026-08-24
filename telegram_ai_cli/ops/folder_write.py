@@ -38,7 +38,7 @@ from .write import (
     open_writer,
     peer_snapshot,
     require_planning_profile,
-    resolve_peer,
+    resolve_chat_argument,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -146,8 +146,14 @@ async def plan_folder_add(ctx: OperationContext, params: BaseModel) -> Plan:
         # link, and Telethon cannot resolve one that names a message. The message
         # part is discarded here on purpose — a folder holds chats, not messages.
         target, _link = await resolve_chat_argument(client, p.chat)
+        # Before the folders are fetched, not after. Resolving the chat is
+        # unavoidable — the policy is written in terms of the peer, and the peer
+        # is not known until then — but everything after it is avoidable, and a
+        # chat this configuration may not touch should not cost a second request
+        # on the account. It also decides which refusal a caller sees: a denied
+        # peer is answered as denied, rather than as "no such folder".
+        require_peer(ctx, Capability.SEND, target.ref, action=FOLDER_ADD_ACTION)
         view = resolve_folder(await load_folders(client, what=FOLDER_ADD_ACTION), str(p.folder))
-    require_peer(ctx, Capability.SEND, target.ref, action=FOLDER_ADD_ACTION)
 
     if view.shareable:
         raise InvalidInput(

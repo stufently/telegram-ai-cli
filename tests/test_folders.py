@@ -17,18 +17,32 @@ documentation. It is a pure function over plain facts, so it is tested as one.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
+from telegram_ai_cli import db
 from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
+from telegram_ai_cli.config import PlansConfig, Settings
 from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import InvalidInput, NotFound, PlanPreconditionFailed
+from telegram_ai_cli.errors import (
+    InvalidInput,
+    NotAllowlisted,
+    NotFound,
+    PlanPreconditionFailed,
+    ProfileForbidden,
+)
 from telegram_ai_cli.ops.chats import ChatsInput, handle_chats
-from telegram_ai_cli.ops.folder_write import add_peer_to_filter, raw_filter_for, recheck_folder
+from telegram_ai_cli.ops.folder_write import (
+    FolderAddInput,
+    add_peer_to_filter,
+    plan_folder_add,
+    raw_filter_for,
+    recheck_folder,
+)
 from telegram_ai_cli.ops.folders import (
     DialogFacts,
     FolderFlags,
@@ -42,6 +56,7 @@ from telegram_ai_cli.ops.folders import (
     resolve_folder,
 )
 from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
+from telegram_ai_cli.plans import PlanStore
 from telegram_ai_cli.safety import PeerKind, SafetyKernel
 from telegram_ai_cli.untrusted import unwrap
 
@@ -239,6 +254,177 @@ def test_a_shareable_folder_is_refused_because_its_members_follow_a_link() -> No
         add_peer_to_filter(item, NEW_CHANNEL, NEW_CHANNEL_ID)
 
     assert item.include_peers == []
+
+
+# --- the planner, run rather than reasoned about -----------------------------
+#
+# Everything above is a pure helper, and the planner is what calls them in
+# order. Nothing had ever *run* `plan_folder_add`: its first version named
+# `resolve_chat_argument` while importing `resolve_peer`, which is a `NameError`
+# on every possible call — a whole operation that could not execute once, with
+# the full suite green. Only the linter noticed.
+#
+# So these drive the planner itself. The helpers are still tested above,
+# because a test that only reaches them through the planner cannot say which of
+# the two is wrong.
+#
+# The client and context builders live further down, beside the ones the read
+# handlers use: the folders are the same stand-ins either way, and a second set
+# would drift from the first.
+
+
+@pytest.mark.asyncio
+async def test_the_plan_pins_the_folder_by_id_and_promises_to_remove_nothing(
+    planning_context: Any,
+) -> None:
+    """The summary is what a person approves, so it states the count and the id.
+
+    The count includes the peer this configuration would refuse to name back —
+    `InputPeerSelf` here — because "2 chats stay" is the promise being made, and
+    a count of only the visible ones would understate what an edit puts at risk.
+    """
+    client = planning_client(
+        FakeFilterList(
+            [
+                FakeFilter(
+                    id=2,
+                    title="постоянные",
+                    include_peers=[FakeInputUser(FRIEND_ID), FakeInputSelf()],
+                )
+            ]
+        )
+    )
+    ctx = planning_context(client)
+
+    plan = await plan_folder_add(ctx, FolderAddInput(folder="постоянные", chat=GROUP_ID))
+
+    assert plan.operation == "folders.add"
+    assert "Marketing" in plan.summary
+    assert "names 2 chat(s)" in plan.summary
+    assert "Nothing is removed" in plan.summary
+    # The id, not the name that found it: a name is re-typed by a person and can
+    # point at another folder by the time the plan is applied.
+    assert plan.preconditions["folder_id"] == 2
+    assert plan.preconditions["peer"]["peer_id"] == GROUP_ID
+
+
+@pytest.mark.asyncio
+async def test_a_chat_the_folder_already_names_is_planned_as_changing_nothing(
+    planning_context: Any,
+) -> None:
+    """Pinned counts as being in the folder, and the summary has to say so.
+
+    Otherwise the plan promises a change and the applier answers "already
+    there", which is the one sentence a reviewer cannot check afterwards.
+    """
+    client = planning_client(
+        FakeFilterList(
+            [FakeFilter(id=2, title="постоянные", pinned_peers=[FakeInputChannel(4242)])]
+        )
+    )
+    ctx = planning_context(client)
+
+    plan = await plan_folder_add(ctx, FolderAddInput(folder="2", chat=GROUP_ID))
+
+    assert "already in the folder" in plan.summary
+
+
+@pytest.mark.asyncio
+async def test_planning_into_a_shareable_folder_is_refused_before_a_plan_exists(
+    planning_context: Any,
+) -> None:
+    """A folder whose members follow an invite link is not edited from here.
+
+    Refused in the planner and not only in the applier: a plan nobody can apply
+    should never reach the review queue in the first place.
+    """
+    client = planning_client(FakeFilterList([FakeChatlist(id=9, title="shared")]))
+    ctx = planning_context(client)
+
+    with pytest.raises(InvalidInput):
+        await plan_folder_add(ctx, FolderAddInput(folder="9", chat=GROUP_ID))
+
+    assert not ctx.plans.list()
+
+
+@pytest.mark.asyncio
+async def test_planning_a_chat_the_folder_excludes_is_refused_rather_than_contradicted(
+    planning_context: Any,
+) -> None:
+    """Including a chat the folder excludes would leave it contradicting itself."""
+    client = planning_client(
+        FakeFilterList(
+            [FakeFilter(id=2, title="постоянные", exclude_peers=[FakeInputChannel(4242)])]
+        )
+    )
+    ctx = planning_context(client)
+
+    with pytest.raises(InvalidInput):
+        await plan_folder_add(ctx, FolderAddInput(folder="2", chat=GROUP_ID))
+
+    assert not ctx.plans.list()
+
+
+@pytest.mark.asyncio
+async def test_a_chat_outside_the_write_policy_is_refused(planning_context: Any) -> None:
+    """A folder is the account's own sorting, and it is still a write.
+
+    The chat has to be one this configuration may act on, or a folder becomes a
+    way to touch a chat the policy closed.
+    """
+    client = planning_client(FakeFilterList([FakeFilter(id=2, title="постоянные")]))
+    ctx = planning_context(client, send_allow=[])
+
+    with pytest.raises(NotAllowlisted):
+        await plan_folder_add(ctx, FolderAddInput(folder="2", chat=GROUP_ID))
+
+    assert not ctx.plans.list()
+    # And refused before the folders were fetched. Resolving the chat is
+    # unavoidable; asking the account for anything else is not, and a folder
+    # that does not exist must not answer "no such folder" to a caller who was
+    # never allowed to touch the chat in the first place.
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_plan_written_from_a_link_is_verified_against_the_same_chat(
+    planning_context: Any,
+) -> None:
+    """The planner understands `t.me/…/412`; verification has to understand it too.
+
+    Asserted on the argument handed to Telethon, not on the answer, because
+    this fake resolves whatever it is given and the real client does not: it
+    cannot resolve a link that names a *message*, and `folder add` documents a
+    link as one of the things its `chat` accepts. Verifying with the plain
+    resolver therefore refused every plan written from a link — at apply time,
+    after a person had already approved it.
+    """
+    from telegram_ai_cli.apply import _verify
+
+    link = "https://t.me/marketing/412"
+    client = planning_client(FakeFilterList([FakeFilter(id=2, title="постоянные")]))
+    ctx = planning_context(client)
+
+    plan = await plan_folder_add(ctx, FolderAddInput(folder="2", chat=link))
+    await _verify(ctx, client, plan, FolderAddInput(folder="2", chat=link))
+
+    planned, verified = client.resolved
+    assert verified == planned
+    # The message part is dropped by both, on purpose: a folder holds chats.
+    assert "412" not in str(planned)
+
+
+@pytest.mark.asyncio
+async def test_readonly_refuses_to_plan_before_telegram_is_touched(planning_context: Any) -> None:
+    """Resolving a username is itself an observable act on the account."""
+    client = planning_client(FakeFilterList([FakeFilter(id=2, title="постоянные")]))
+    ctx = planning_context(client, profile="readonly")
+
+    with pytest.raises(ProfileForbidden):
+        await plan_folder_add(ctx, FolderAddInput(folder="2", chat=GROUP_ID))
+
+    assert client.resolved == []
+    assert client.requests == []
 
 
 # --- parsing ----------------------------------------------------------------
@@ -562,16 +748,26 @@ class FakeDialog:
 
 
 class FakeClient:
-    """Just enough client for a read handler: dialogs, folders, mute defaults."""
+    """Just enough client for a read handler: dialogs, folders, mute defaults.
 
-    def __init__(self, dialogs: list[Any], filters: Any, notify: Any = None) -> None:
+    ``entity`` is what planning adds: a planner resolves the chat it is given
+    before it looks at any folder. It stays optional and unset by default, so a
+    read handler that starts resolving entities fails here rather than being
+    answered by something irrelevant.
+    """
+
+    def __init__(
+        self, dialogs: list[Any], filters: Any, notify: Any = None, entity: Any = None
+    ) -> None:
         self._dialogs = dialogs
         self._filters = filters
         #: What `account.getNotifySettings` answers, by the switch asked about.
         #: An account that has changed nothing answers with settings that say
         #: nothing, which is what the empty default stands for here.
         self._notify: dict[str, Any] = notify or {}
+        self._entity = entity
         self.requests: list[Any] = []
+        self.resolved: list[Any] = []
         self.asked_who_i_am = 0
 
     def is_connected(self) -> bool:
@@ -579,6 +775,15 @@ class FakeClient:
 
     async def is_user_authorized(self) -> bool:
         return True
+
+    async def get_entity(self, target: Any) -> Any:
+        self.resolved.append(target)
+        if self._entity is None:
+            # What Telethon raises for a handle it cannot resolve, which is what
+            # `resolve_peer` turns into a `PeerUnresolved`. Returning a stand-in
+            # instead would let a planner act on a chat nobody named.
+            raise ValueError(f"no entity was canned for {target!r}")
+        return self._entity
 
     async def get_me(self) -> Any:
         from telethon.tl.types import User
@@ -650,6 +855,56 @@ def context(tmp_path, client: Any, **overrides: Any) -> OperationContext:
         actor="cli",
         accounts=FakeRegistry(client),  # type: ignore[arg-type]
     )
+
+
+def planning_client(filters: Any) -> FakeClient:
+    """A client for the write path: one resolvable chat and this account's folders.
+
+    No dialogs at all — planning never enumerates them, and an empty list is the
+    assertion that it does not start.
+    """
+    group, _friend, _service = telegram_entities()
+    return FakeClient([], filters, entity=group)
+
+
+@pytest.fixture
+def planning_context(tmp_path) -> Iterator[Any]:
+    """Build a context that can *store* a plan, around a fake client.
+
+    `context` above hands the read handlers ``plans=None``, which is all a
+    listing needs. A planner's entire output is a stored plan, so this one owns
+    a real store — and closes its connection on the way out rather than leaving
+    it to the garbage collector.
+
+    ``send_allow`` defaults to the one group these tests plan against: a folder
+    is the account's own sorting, but putting a chat into one is still a write,
+    and the write policy is what says which chats may be touched.
+    """
+    connection = db.connect(tmp_path / "plans.db")
+
+    def build(
+        client: Any,
+        *,
+        profile: str = "plan",
+        send_allow: list[Any] | None = None,
+    ) -> OperationContext:
+        settings = Settings(
+            profile=profile,  # type: ignore[arg-type]
+            plans={"encrypt_bodies": False},
+            safety={"write": {"send": {"allow": [GROUP_ID] if send_allow is None else send_allow}}},
+        )
+        return OperationContext(
+            settings=settings,
+            safety=SafetyKernel(settings),
+            plans=PlanStore(connection, PlansConfig(encrypt_bodies=False)),
+            limits=None,  # type: ignore[arg-type]
+            audit=AuditLog(tmp_path / "audit.log", settings.audit),
+            actor="cli",
+            accounts=FakeRegistry(client),  # type: ignore[arg-type]
+        )
+
+    yield build
+    connection.close()
 
 
 def everything_folder() -> FakeFilterList:
