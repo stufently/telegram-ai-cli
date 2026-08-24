@@ -23,13 +23,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from fakes import NOW, FakeClient, FakeMessage
+from fakes import NOW, FakeClient, FakeDialog, FakeMessage
 from telethon import utils
 from telethon.tl import types as tl
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 
 from telegram_ai_cli.errors import InvalidInput, NotAllowlisted
 from telegram_ai_cli.ops.chats import ChatReadInput, handle_chat_read
+from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
 from telegram_ai_cli.ops.pending import DraftsInput, handle_drafts
 
 GROUP_ID = 4242
@@ -248,6 +249,51 @@ async def test_each_draft_lands_in_the_bucket_its_verdict_names(make_context: An
     printed = str(envelope.data)
     assert "see you at six" not in printed
     assert "not for you" not in printed
+
+
+@pytest.mark.asyncio
+async def test_the_inbox_counts_an_unreadable_chat_without_quoting_it(
+    make_context: Any,
+) -> None:
+    """Enumeration says a conversation exists; it does not say what is in it.
+
+    The inbox row carries a preview, and a preview is the last message's text —
+    so a listing that enumerates direct messages would otherwise hand back a
+    line out of every one of them, including the chats the DM allowlist refuses.
+    `telegram_drafts` and `telegram_mentions` both ask before quoting; this is
+    the same question, asked at the point the text is attached.
+    """
+    client = FakeClient(
+        dialogs=[
+            FakeDialog(
+                entity=group(),
+                unread_count=3,
+                message=FakeMessage(message="quarterly numbers are in"),
+            ),
+            FakeDialog(
+                entity=friend(),
+                unread_count=1,
+                message=FakeMessage(message="the door code is on the fridge"),
+            ),
+        ],
+    )
+    ctx = make_context(
+        client,
+        **{"safety": {"read": {"enumerate_dms": True}}},
+    )
+
+    envelope = await handle_inbox(ctx, InboxInput(include_private=True, include_muted=True))
+
+    rows = {row["chat_id"]: row for row in envelope.data["waiting"]}
+    # Both are listed: enumeration was permitted, and withholding the row would
+    # hide that the conversation is waiting at all.
+    assert set(rows) == {MARKED_GROUP_ID, FRIEND_ID}
+    # `in`, not equality: a preview travels inside the untrusted-content
+    # markers, which is what makes it quotable at all.
+    assert "quarterly numbers are in" in rows[MARKED_GROUP_ID]["preview"]
+    assert rows[FRIEND_ID]["preview"] is None
+    assert "door code" not in str(envelope.data)
+    assert any("1 preview(s) withheld" in one for one in envelope.warnings)
 
 
 @pytest.mark.asyncio

@@ -108,10 +108,16 @@ async def _sweep_account(
     ctx: OperationContext,
     label: str,
     params: InboxInput,
-) -> tuple[list[dict[str, Any]], int]:
-    """Collect the waiting conversations of one account."""
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Collect the waiting conversations of one account.
+
+    Three numbers come back rather than one list: the rows, how many private
+    chats the enumeration switch kept out, and how many rows are listed without
+    their preview because the read policy does not permit their contents.
+    """
     rows: list[dict[str, Any]] = []
     hidden = 0
+    withheld = 0
 
     async with open_account(ctx, label) as account:
         # Folders belong to an account, so each one in the sweep resolves the
@@ -166,11 +172,23 @@ async def _sweep_account(
                     continue
 
                 row["account"] = label
-                row["preview"] = preview_of(getattr(dialog, "message", None))
-                row["last_from_me"] = bool(getattr(getattr(dialog, "message", None), "out", False))
+                # A preview is the last message's text, and text is content:
+                # enumeration got us the row, it does not get us what is in it.
+                # The kernel remaps a private peer onto the DM policy on its
+                # own, so `enumerate_dms` — which only decides whether a DM is
+                # *listed* — cannot become a way to read one. The row still
+                # goes out: that a conversation is waiting is the counter, and
+                # the counter is what enumeration is for.
+                message = getattr(dialog, "message", None)
+                if ctx.safety.check(Capability.READ_CHAT, ref).allowed:
+                    row["preview"] = preview_of(message)
+                else:
+                    row["preview"] = None
+                    withheld += 1
+                row["last_from_me"] = bool(getattr(message, "out", False))
                 rows.append(row)
 
-    return rows, hidden
+    return rows, hidden, withheld
 
 
 async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
@@ -180,10 +198,11 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
     warnings: list[str] = []
     collected: list[dict[str, Any]] = []
     hidden_total = 0
+    withheld_total = 0
 
     for label in labels:
         try:
-            rows, hidden = await _sweep_account(ctx, label, params)
+            rows, hidden, withheld = await _sweep_account(ctx, label, params)
         except Exception as exc:  # noqa: BLE001 - one bad account must not blank the fleet
             # This project's own errors carry a sentence written for a person;
             # a bare class name turns "this account has no folder called Work"
@@ -193,6 +212,7 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
             continue
         collected.extend(rows)
         hidden_total += hidden
+        withheld_total += withheld
 
     collected.sort(key=_rank)
     shown = collected[: params.limit]
@@ -200,6 +220,12 @@ async def handle_inbox(ctx: OperationContext, params: InboxInput) -> Envelope:
     if hidden_total:
         warnings.append(
             f"{hidden_total} private chat(s) omitted; enumeration of direct messages is off"
+        )
+
+    if withheld_total:
+        warnings.append(
+            f"{withheld_total} preview(s) withheld; those conversations are listed but the "
+            "read policy does not permit their contents"
         )
 
     totals = {

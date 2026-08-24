@@ -478,6 +478,14 @@ older silence is the more overdue.
 meaning "and reactions". A row carries all three counts (`unread`, `mentions`,
 `reactions`), and `totals` sums each.
 
+**A row's `preview` is content, and it is gated separately from the row.** The
+capability on this operation is `enumerate`, which decides whether a chat is
+listed at all; the preview is the last message's text, so it is attached only
+when `read_chat` — remapped to `read_dm` for a private chat — permits that chat.
+A conversation the policy will not open is still listed, with `preview: null`,
+and the number of previews withheld is reported in `warnings`. Turning
+`enumerate_dms` on is therefore not a way to read direct messages.
+
 ### `telegram_mentions` — `tg-ai mentions`
 
 The messages behind those two counters: who mentioned or replied to this

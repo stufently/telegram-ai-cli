@@ -997,6 +997,19 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **`telegram_inbox` quoted direct messages the read policy refuses.** Each row
+  carries a `preview` — the last message's text — and it was attached from the
+  dialog list without asking the safety kernel. Enumeration and reading are two
+  separate switches by design (`enumerate_dms` decides whether a private chat is
+  *listed*; `safety.read.dms.allow` decides whether it may be *read*, and empty
+  means none), so an account with `enumerate_dms: true` and no DM allowlist got
+  a line out of every private conversation it had — from the one operation most
+  likely to be called first. `telegram_drafts` and `telegram_mentions` already
+  asked before quoting; the inbox now asks at the point the text is attached,
+  still lists the conversation, returns `preview: null`, and reports how many
+  previews were withheld. Found by review of the plugin skills, which described
+  the boundary the code did not keep.
+
 - **A login rewrote the account row before it took the session lock.**
   `login_and_register` and `qr_login_and_register` wrote `phone`, `source`,
   `session_path` and `status` — the four columns the loader reads to decide what

@@ -219,9 +219,11 @@ Listing dialogs is how a reader finds what exists — and the cheapest possible
 reconnaissance step. It is on by default because a tool that cannot list chats
 cannot discover the ids everything else needs, but private conversations stay
 out of the listing until `enumerate_dms` says otherwise, and they stay
-unreadable until `safety.read.dms.allow` names them. Enumeration also has a
-ceiling of its own (`MAX_DIALOG_SCAN`, 1000 dialogs walked) independent of the
-caller's `limit`.
+unreadable until `safety.read.dms.allow` names them. That holds for the message
+previews an inbox row carries too: a listed chat the read policy will not open
+comes back with `preview: null` and is counted in `warnings`. Enumeration also
+has a ceiling of its own (`MAX_DIALOG_SCAN`, 1000 dialogs walked) independent of
+the caller's `limit`.
 
 ### A worked example
 
