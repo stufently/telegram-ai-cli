@@ -46,7 +46,7 @@ Handing a model raw Telethon or a thin MTProto wrapper hands it Telegram's sharp
 | `tg-ai inbox` | What's waiting for a reply right now, across every configured account |
 | `tg-ai watch` | Wait for the next incoming message instead of polling for it — a burst of fast replies comes back as one answer, and the wait is capped |
 | `tg-ai search` | Which messages match a phrase, and where — with `--context N`, the messages either side of each match |
-| `tg-ai whois` | Who a `@username`, numeric id or invite resolves to; for channels, the linked Direct Messages chat id |
+| `tg-ai whois` | Who a `@username`, numeric id or invite resolves to; for channels, the "message the admins" Direct Messages chat — its name, and an id you can read or send to without joining anything |
 | `tg-ai chat members` | Who's in a chat, and who administers it |
 | `tg-ai media fetch` | Save a message's photo, video or document to a server-controlled path |
 | `tg-ai media transcribe` | Turn a voice message into text — Whisper in an optional container, on your own machine, with the network switched off |

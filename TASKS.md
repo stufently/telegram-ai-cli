@@ -49,3 +49,9 @@ does not have:
 - [ ] With a real forum, page `chat topics` using the returned three-part cursor
       and page scoped `mentions` with its returned offsets. The command exists
       again as of the fix above; only its paging is still unexercised live.
+- [ ] Against a channel this account neither runs nor has ever written to, run
+      `whois` and then send to the `linked_monoforum_id` it returns. The unit
+      tests pin that `GetFullChannel` is issued, and Telethon's own
+      `process_entities` stores what it returns — but only a live account can
+      show that the id then resolves for an inbox that was never in its
+      dialogs, which is the whole point of the call.

@@ -75,6 +75,12 @@ UNTRUSTED_FIELDS: frozenset[str] = frozenset(
         "transcript",
         "caption",
         "title",
+        # A channel's Direct Messages inbox is named by whoever runs the
+        # channel, so it is a title in every sense but its key. Spelled out
+        # because the match is on the exact field name: a prefixed variant of a
+        # framed field arrives unframed, which is the failure this list exists
+        # to prevent.
+        "linked_monoforum_title",
         "sender",
         "forwarded_from",
         "preview",

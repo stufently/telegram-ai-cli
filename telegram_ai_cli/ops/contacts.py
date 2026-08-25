@@ -23,7 +23,7 @@ from pydantic import Field
 
 from ..context import OperationContext
 from ..envelope import Envelope
-from ..errors import InvalidInput, PolicyError
+from ..errors import FloodWait, InvalidInput, PolicyError, SessionRevoked, TelegramAIError
 from ..opspec import REGISTRY, Effect, Operation
 from ._client import open_account
 from ._common import (
@@ -120,6 +120,73 @@ async def _describe_invite(ctx: OperationContext, account: Any, invite_hash: str
     }
 
 
+async def _monoforum_inbox(
+    account: Any, entity: Any, inbox_id: int, warnings: list[str]
+) -> str | None:
+    """Make a channel's Direct Messages inbox addressable, and name it.
+
+    ``linked_monoforum_id`` arrives on the channel entity itself, but the inbox
+    is a *separate* channel with its own access hash — and an id without that
+    hash is not something Telethon can resolve at all. The hash comes only
+    inside ``GetFullChannel``'s ``chats``, and Telethon writes every entity of
+    a response into the session, so this call is what turns a discovered id
+    into one that ``chat read`` and a write plan can actually use. Without it
+    the id resolves for an inbox already in this account's dialogs and for no
+    other — which is precisely the case nobody needs to look up.
+
+    A failure costs the addressing, not the answer: the identity is already
+    correct, and the caller is told why the inbox may not resolve. Two failures
+    are re-raised instead, because neither is about this channel: a flood wait
+    says everything after this is rate limited and carries the interval
+    Telegram named, and a revoked session says the account is signed out — an
+    answer that came back ``ok`` would have hidden both.
+
+    **The scope of the promise is one process.** Telethon stores entities in
+    the session, and a file-backed session keeps them; an account configured as
+    a string session gets a fresh in-memory store on every open, and
+    ``StringSession.save()`` writes the DC and auth key only. There the id is
+    addressable for as long as this client lives — the daemon, or the rest of
+    one command — and a later command has to look it up again.
+    """
+    from telethon.tl.functions.channels import GetFullChannelRequest
+
+    try:
+        with telegram_errors(what="whois monoforum"):
+            full = await account.client(GetFullChannelRequest(channel=entity))
+    except (FloodWait, SessionRevoked):
+        raise
+    except TelegramAIError as exc:
+        warnings.append(f"direct messages inbox not confirmed: {exc.message}")
+        return None
+
+    for chat in getattr(full, "chats", None) or []:
+        if peer_ref(chat).peer_id != inbox_id:
+            continue
+        # Arriving in the response is not the same as being usable. Telethon
+        # stores an entity only when it carries a real access hash and is not a
+        # `min` object, and it does that silently — so the addressing claim is
+        # made by asking for the input peer, which is exactly what a send would
+        # ask for, rather than by assuming the store accepted what it was given.
+        try:
+            await account.client.get_input_entity(inbox_id)
+        except (ValueError, TypeError):
+            warnings.append(
+                "direct messages inbox is not addressable from this account; "
+                "sending to linked_monoforum_id will not resolve"
+            )
+            return None
+        return display_name(chat)
+
+    # The id is still returned: it is what the channel itself reported. What is
+    # gone is the assurance that it can be addressed, and saying so beats a
+    # caller discovering it as an unresolvable peer at apply time.
+    warnings.append(
+        "Telegram did not return the direct messages inbox; sending to "
+        "linked_monoforum_id may not resolve"
+    )
+    return None
+
+
 async def _common_chats(
     ctx: OperationContext, account: Any, entity: Any, warnings: list[str]
 ) -> list[dict[str, Any]] | None:
@@ -177,6 +244,12 @@ async def handle_whois(ctx: OperationContext, params: WhoisInput) -> Envelope:
         data["premium"] = bool(getattr(entity, "premium", False))
         data["restricted"] = bool(getattr(entity, "restricted", False))
         data["participants"] = getattr(entity, "participants_count", None)
+
+        inbox_id = data.get("linked_monoforum_id")
+        if inbox_id is not None:
+            data["linked_monoforum_title"] = await _monoforum_inbox(
+                account, entity, int(inbox_id), warnings
+            )
 
         if params.common_chats and ref.is_private and not data["bot"]:
             data["common_chats"] = await _common_chats(ctx, account, entity, warnings)

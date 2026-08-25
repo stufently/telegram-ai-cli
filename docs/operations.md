@@ -694,9 +694,25 @@ content; the hard denylist still applies.
 
 For a channel with Telegram Direct Messages enabled, the identity also carries
 `linked_monoforum_id`: the marked chat id accepted directly by `chat read` and
-write plans. This discovers the administration inbox without a separate raw
-Telegram lookup; addressing a per-user topic inside one's own monoforum is not
+write plans, and `linked_monoforum_title`, the inbox's own name. This discovers
+the administration inbox — the "message the admins" chat that is neither the
+channel, its discussion group, nor anyone's DMs — without a raw Telegram
+lookup, and it is addressable straight away: **the id alone would not be.** The
+inbox is a channel of its own with its own access hash, which arrives only
+inside `GetFullChannel`, so the lookup makes that call and Telethon stores what
+comes back. Without it the number resolves for an inbox already in this
+account's dialogs and for no other — that is, for every case except the one
+worth looking up. Addressing a per-user topic inside one's own monoforum is not
 yet supported.
+
+The id is returned even when the inbox is not confirmed, with a warning saying
+so: it is what the channel itself reported, and a caller must not read its
+presence as proof that a send to it will resolve. Confirmation is a check, not
+an assumption — Telethon keeps only entities with a real access hash that are
+not `min`, and drops the rest silently, so the inbox's input peer is asked for
+before the name comes back. **The promise lasts as long as the client:** a
+file-backed session keeps what it stored, a string session starts empty on
+every open, and a later command there has to look the channel up again.
 
 | Argument | Type | Default | Meaning |
 | --- | --- | --- | --- |

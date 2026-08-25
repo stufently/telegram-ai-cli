@@ -124,6 +124,7 @@ class FakeClient:
         *,
         entity: Any = None,
         entities: dict[Any, Any] | None = None,
+        inputs: dict[Any, Any] | None = None,
         dialogs: list[Any] | None = None,
         messages: list[Any] | None = None,
         drafts: list[Any] | None = None,
@@ -133,6 +134,9 @@ class FakeClient:
     ) -> None:
         self._entity = entity
         self._entities = entities or {}
+        #: Which ids the session would resolve to an input peer — the store
+        #: Telethon fills from responses, stated by the test instead.
+        self._inputs = inputs or {}
         self._dialogs = dialogs or []
         self._messages = messages or []
         self._drafts = drafts or []
@@ -172,6 +176,19 @@ class FakeClient:
         if self._entity is None:
             raise UnexpectedRequest(f"no entity was canned for {target!r}")
         return self._entity
+
+    async def get_input_entity(self, target: Any) -> Any:
+        """Telethon's own contract: what the session already knows, or nothing.
+
+        A ``ValueError`` for an id the store never accepted is not an edge case
+        to be smoothed over — it is the difference between an id that can be
+        sent to and one that only looks like it. A fake that answered every id
+        would certify exactly the bug this method is asked about.
+        """
+        self.calls.append(("get_input_entity", target, {}))
+        if target in self._inputs:
+            return self._inputs[target]
+        raise ValueError(f"Could not find the input entity for {target!r}")
 
     async def get_messages(self, target: Any, **kwargs: Any) -> Any:
         """Telethon's two shapes, kept apart.

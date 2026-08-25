@@ -34,7 +34,42 @@ before that, breaking changes can happen on any `0.x` release.
 - Channel identity summaries now expose `linked_monoforum_id` when Telegram
   Direct Messages are enabled. The value is converted to the same marked chat
   id accepted by every read and plan operation, so `tg-ai whois` can discover
-  the administration inbox without a raw Telethon lookup.
+  the administration inbox without a raw Telethon lookup — the chat that is
+  neither the channel, its discussion group, nor an admin's DMs, and that has
+  no other addressable name.
+
+  **The id alone would not have been addressable**, which the first cut missed:
+  it is read off the channel entity, while the inbox is a channel of its own
+  whose access hash arrives only inside `GetFullChannel`'s `chats` — and
+  Telethon cannot resolve an id whose hash it has never seen. `whois` now makes
+  that call when, and only when, the channel reports an inbox, so Telethon
+  stores the hash and the id works in `chat read` and in a write plan without
+  joining anything. What was shipped before resolved for an inbox already in
+  the account's dialogs and for nothing else: every case except the one a
+  person looks it up for. The inbox's name comes back as
+  `linked_monoforum_title`; when Telegram does not return the inbox, or the
+  lookup fails, the id is still returned with a warning that says it may not
+  resolve — silence there would read as confirmation.
+
+  **Arriving in the response is not the same as being stored**, so the claim is
+  checked rather than assumed: Telethon keeps an entity only when it carries a
+  real access hash and is not a `min` object, and it drops the rest without a
+  word. The lookup therefore asks for the inbox's input peer — the same thing a
+  send would ask for — and downgrades to a warning when the session does not
+  have it. The scope of the promise is one process: a file-backed session keeps
+  what it stored, while a string session gets a fresh in-memory store on every
+  open and `StringSession.save()` writes the DC and auth key only, so there the
+  id lasts as long as the client (the daemon, or the rest of one command) and a
+  later command looks it up again.
+
+  Two failures are raised instead of folded into that warning, because neither
+  is about the channel: a flood wait, whose interval would be lost in prose,
+  and a revoked session — `get_entity` can be answered from the session without
+  a request, which makes this the call where a signed-out account first shows
+  up, and `ok` would be the wrong answer for an account that can do nothing.
+  The inbox's name is framed as untrusted like any other title: whoever runs
+  the channel chooses it, and a field that is a title in everything but its key
+  would otherwise arrive unframed.
 
 - **The repository is a Claude Code plugin.** `.claude-plugin/plugin.json`,
   `.claude-plugin/marketplace.json` and `plugin.mcp.json`, in the same shape as
