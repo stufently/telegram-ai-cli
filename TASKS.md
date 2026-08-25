@@ -49,9 +49,17 @@ does not have:
 - [ ] With a real forum, page `chat topics` using the returned three-part cursor
       and page scoped `mentions` with its returned offsets. The command exists
       again as of the fix above; only its paging is still unexercised live.
-- [ ] Against a channel this account neither runs nor has ever written to, run
-      `whois` and then send to the `linked_monoforum_id` it returns. The unit
-      tests pin that `GetFullChannel` is issued, and Telethon's own
-      `process_entities` stores what it returns — but only a live account can
-      show that the id then resolves for an inbox that was never in its
-      dialogs, which is the whole point of the call.
+The monoforum path had its own live pass on 2026-08-25, against channels this
+account neither runs nor had ever written to. `whois` returned the inbox and
+its name for ten of the first twenty-five channels in the account's dialogs; a
+`chat read` and a prepared `message.send` plan both resolved an inbox from a
+separate process. It also corrected the reason the code exists: the id resolves
+even without `GetFullChannel`, because Telethon falls back to
+`channels.GetChannels` with `access_hash=0` and Telegram answers it — so the
+call buys the name, the confirmation and the cached hash, not the addressing.
+`CHANGELOG.md` and `docs/operations.md` say that now. What is still unexercised
+there needs a second account:
+
+- [ ] Apply a `message.send` plan into a monoforum inbox — the live pass
+      stopped at the prepared plan, because applying it would have written to a
+      stranger's channel.

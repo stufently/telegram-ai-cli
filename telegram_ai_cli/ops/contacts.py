@@ -123,30 +123,36 @@ async def _describe_invite(ctx: OperationContext, account: Any, invite_hash: str
 async def _monoforum_inbox(
     account: Any, entity: Any, inbox_id: int, warnings: list[str]
 ) -> str | None:
-    """Make a channel's Direct Messages inbox addressable, and name it.
+    """Confirm a channel's Direct Messages inbox, name it, and cache its hash.
 
-    ``linked_monoforum_id`` arrives on the channel entity itself, but the inbox
-    is a *separate* channel with its own access hash — and an id without that
-    hash is not something Telethon can resolve at all. The hash comes only
-    inside ``GetFullChannel``'s ``chats``, and Telethon writes every entity of
-    a response into the session, so this call is what turns a discovered id
-    into one that ``chat read`` and a write plan can actually use. Without it
-    the id resolves for an inbox already in this account's dialogs and for no
-    other — which is precisely the case nobody needs to look up.
+    ``linked_monoforum_id`` arrives on the channel entity itself, while the
+    inbox is a *separate* channel with its own access hash — which the entity
+    does not carry, and only ``GetFullChannel``'s ``chats`` does. Telethon
+    writes every entity of a response into the session, so asking here is what
+    puts the real hash where later resolutions find it.
 
-    A failure costs the addressing, not the answer: the identity is already
-    correct, and the caller is told why the inbox may not resolve. Two failures
-    are re-raised instead, because neither is about this channel: a flood wait
-    says everything after this is rate limited and carries the interval
-    Telegram named, and a revoked session says the account is signed out — an
-    answer that came back ``ok`` would have hidden both.
+    **What this is not.** It is not what makes the id resolvable: Telethon
+    falls back to ``channels.GetChannels`` with ``access_hash=0`` for a peer it
+    does not know, and Telegram answers that for a monoforum — checked live
+    against three channels this account had never written to. So the id worked
+    before this call existed. What the call buys is the inbox's name, an answer
+    that came from Telegram rather than from a field on another object, and a
+    hash that spares every later resolution that fallback round-trip. It also
+    covers the case the fallback does not: an id it refuses is indistinguishable
+    from one that does not exist, and the full channel still carries the hash.
 
-    **The scope of the promise is one process.** Telethon stores entities in
-    the session, and a file-backed session keeps them; an account configured as
-    a string session gets a fresh in-memory store on every open, and
-    ``StringSession.save()`` writes the DC and auth key only. There the id is
-    addressable for as long as this client lives — the daemon, or the rest of
-    one command — and a later command has to look it up again.
+    A failure costs those things, not the answer: the identity is already
+    correct, and the caller is told the inbox is unconfirmed. Two failures are
+    re-raised instead, because neither is about this channel: a flood wait says
+    everything after this is rate limited and carries the interval Telegram
+    named, and a revoked session says the account is signed out — an answer
+    that came back ``ok`` would have hidden both.
+
+    **What the cache is worth lasts one process.** A file-backed session keeps
+    what it stored; an account configured as a string session gets a fresh
+    in-memory store on every open, since ``StringSession.save()`` writes the DC
+    and auth key only. There a later command resolves through the fallback
+    again rather than from the session.
     """
     from telethon.tl.functions.channels import GetFullChannelRequest
 

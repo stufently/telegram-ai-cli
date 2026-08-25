@@ -38,29 +38,33 @@ before that, breaking changes can happen on any `0.x` release.
   neither the channel, its discussion group, nor an admin's DMs, and that has
   no other addressable name.
 
-  **The id alone would not have been addressable**, which the first cut missed:
-  it is read off the channel entity, while the inbox is a channel of its own
-  whose access hash arrives only inside `GetFullChannel`'s `chats` — and
-  Telethon cannot resolve an id whose hash it has never seen. `whois` now makes
-  that call when, and only when, the channel reports an inbox, so Telethon
-  stores the hash and the id works in `chat read` and in a write plan without
-  joining anything. What was shipped before resolved for an inbox already in
-  the account's dialogs and for nothing else: every case except the one a
-  person looks it up for. The inbox's name comes back as
-  `linked_monoforum_title`; when Telegram does not return the inbox, or the
-  lookup fails, the id is still returned with a warning that says it may not
-  resolve — silence there would read as confirmation.
+  The lookup now asks Telegram about the inbox instead of only copying its id
+  off the channel: `whois` issues `GetFullChannel` when, and only when, the
+  channel reports one, finds the inbox among the `chats` that response carries,
+  and returns its name as `linked_monoforum_title`. When Telegram does not
+  return the inbox, or the request fails, the id still comes back — with a
+  warning, because silence there would read as confirmation.
 
-  **Arriving in the response is not the same as being stored**, so the claim is
+  **This is not what makes the id resolvable**, contrary to what the first
+  version of this entry claimed. A live check against three channels this
+  account had never written to resolved their inboxes with no `GetFullChannel`
+  in sight: Telethon falls back to `channels.GetChannels` with `access_hash=0`
+  for a peer it does not know, and Telegram answers that for a monoforum. What
+  the call is worth is narrower and still real — the inbox's name, which exists
+  nowhere on the channel entity; an existence check answered by Telegram rather
+  than inferred from a field; a stored hash, so later resolutions skip that
+  fallback round-trip; and cover for the case the fallback does not handle,
+  where a refused id is indistinguishable from one that never existed.
+
+  **Arriving in the response is not the same as being stored**, so the result is
   checked rather than assumed: Telethon keeps an entity only when it carries a
   real access hash and is not a `min` object, and it drops the rest without a
   word. The lookup therefore asks for the inbox's input peer — the same thing a
-  send would ask for — and downgrades to a warning when the session does not
-  have it. The scope of the promise is one process: a file-backed session keeps
-  what it stored, while a string session gets a fresh in-memory store on every
-  open and `StringSession.save()` writes the DC and auth key only, so there the
-  id lasts as long as the client (the daemon, or the rest of one command) and a
-  later command looks it up again.
+  send would ask for — and downgrades to a warning when that fails. What the
+  stored hash buys lasts one process: a file-backed session keeps it, while a
+  string session gets a fresh in-memory store on every open and
+  `StringSession.save()` writes the DC and auth key only, so a later command
+  there resolves through the fallback again.
 
   Two failures are raised instead of folded into that warning, because neither
   is about the channel: a flood wait, whose interval would be lost in prose,

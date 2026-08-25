@@ -1,18 +1,20 @@
 """Looking up a channel that has Telegram Direct Messages turned on.
 
 `linked_monoforum_id` is only half an answer. The inbox is a channel of its
-own, with its own access hash, and Telethon cannot resolve an id whose hash it
-has never seen — so a lookup that merely copied the number off the channel
-would hand back an id that resolves for an inbox already in this account's
-dialogs and for nothing else. These tests pin the call that fixes that
-(`GetFullChannel`, whose `chats` carry the hash Telethon then stores), that the
-claim is checked rather than assumed, and that it is not paid for by channels
-which have no inbox at all.
+own with its own access hash, which the channel entity does not carry — so the
+lookup asks `GetFullChannel`, whose `chats` do, and Telethon stores what comes
+back. That is worth the round-trip for the inbox's name, for an answer that
+came from Telegram rather than from a field on another object, and for a hash
+later resolutions can use; it is *not* what makes the id resolvable, because
+Telethon falls back to `channels.GetChannels` with `access_hash=0` and Telegram
+answers that for a monoforum. These tests pin the call, that its result is
+checked rather than assumed, and that a channel with no inbox does not pay for
+it.
 
 The check matters more than the call: Telethon stores an entity only when it
 carries a real access hash and is not `min`, and it does so silently. A test
-that asserted only "the request went out" would pass on precisely the version
-that hands back an unusable id.
+that asserted only "the request went out" would pass on the version that
+reports an inbox it never confirmed.
 """
 
 from __future__ import annotations
@@ -85,12 +87,10 @@ def looking_up(*, chats: list[Any] | None = None, addressable: bool = True) -> F
     )
 
 
-async def test_the_inbox_is_fetched_so_its_id_can_actually_be_addressed(
-    make_context: Any,
-) -> None:
-    """The id off the entity is not addressable on its own: only the full
-    channel carries the inbox's access hash, and that request is what puts it
-    where a later `chat read` or send can find it."""
+async def test_the_inbox_is_fetched_from_telegram_and_named(make_context: Any) -> None:
+    """The channel entity carries the inbox's id and nothing else about it —
+    no name, and no access hash. Both come from the full channel, and asking
+    for them is also what leaves the hash in the session."""
     client = looking_up()
 
     envelope = await handle_whois(make_context(client), WhoisInput(target="@news"))
