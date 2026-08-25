@@ -23,9 +23,14 @@ boundary, but absence here is intentional rather than unfinished work.
 
 - No album upload, custom thumbnail, forced voice/video-note mode, block-list
   browser, reaction roster expansion, moderation-state browser, mass history
-  deletion, folder editing, or monoforum per-user reply operation is exposed.
-  These each widen either privacy reach or destructive scope and require a
-  concrete product request before becoming plan operations.
+  deletion, or monoforum per-user reply operation is exposed. These each widen
+  either privacy reach or destructive scope and require a concrete product
+  request before becoming plan operations.
+- Of folder editing, only `folder add` exists. Removing a chat from a folder,
+  renaming one, reordering them and deleting one all stay out for the reason
+  that made `add` hard: `UpdateDialogFilter` replaces the whole folder, so
+  every one of them would have to send back membership this program is not
+  allowed to see.
 - Reaction availability and per-chat reaction-count ceilings are left to
   Telegram's apply-time validation. Topic reads use chat-wide read state; the
   topic listing exposes Telegram's per-topic counters separately.

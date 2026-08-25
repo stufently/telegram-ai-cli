@@ -49,6 +49,7 @@ does not have:
 - [ ] With a real forum, page `chat topics` using the returned three-part cursor
       and page scoped `mentions` with its returned offsets. The command exists
       again as of the fix above; only its paging is still unexercised live.
+
 The monoforum path had its own live pass on 2026-08-25, against channels this
 account neither runs nor had ever written to. `whois` returned the inbox and
 its name for ten of the first twenty-five channels in the account's dialogs; a
