@@ -34,22 +34,22 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from telegram_ai_cli import db
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import InvalidInput
-from telegram_ai_cli.limits import LimitStore
-from telegram_ai_cli.ops.search import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import InvalidInput
+from telegram_ai_cli_mcp.limits import LimitStore
+from telegram_ai_cli_mcp.ops.search import (
     MAX_CONTEXT,
     MAX_CONTEXT_HITS,
     SearchInput,
     handle_search,
 )
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import SafetyKernel
-from telegram_ai_cli.secretbox import SecretBox
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import SafetyKernel
+from telegram_ai_cli_mcp.secretbox import SecretBox
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 # --- a Telegram that is entirely local --------------------------------------
 

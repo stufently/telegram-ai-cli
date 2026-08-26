@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from telegram_ai_cli.redact import redact, redact_mapping
+from telegram_ai_cli_mcp.redact import redact, redact_mapping
 
 # Fictional numbers, written in parts so no E.164-shaped literal exists in the
 # repository. The +1-555-01xx range is reserved for fiction.

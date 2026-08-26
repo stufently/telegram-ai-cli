@@ -21,12 +21,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.errors import NotAllowlisted
-from telegram_ai_cli.ops.sessions import SESSIONS, ip_prefix, session_summary
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.safety import Capability, SafetyKernel
-from telegram_ai_cli.untrusted import OPEN_MARKER, wrap_untrusted
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.errors import NotAllowlisted
+from telegram_ai_cli_mcp.ops.sessions import SESSIONS, ip_prefix, session_summary
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.safety import Capability, SafetyKernel
+from telegram_ai_cli_mcp.untrusted import OPEN_MARKER, wrap_untrusted
 
 CREATED = datetime(2026, 3, 1, 8, 0, tzinfo=UTC)
 ACTIVE = datetime(2026, 8, 23, 11, 15, tzinfo=UTC)
@@ -169,7 +169,7 @@ def test_no_module_names_a_call_that_would_end_one() -> None:
     handler later, which is exactly how a decision like this erodes (raised by
     review).
     """
-    package = Path(__file__).resolve().parents[1] / "telegram_ai_cli"
+    package = Path(__file__).resolve().parents[1] / "telegram_ai_cli_mcp"
     sources = sorted(package.rglob("*.py"))
     assert len(sources) > 10, "the scan walked nothing"
 

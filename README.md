@@ -1,11 +1,11 @@
-# telegram-ai-cli — CLI and MCP server for AI agents on a personal Telegram account
+# telegram-ai-cli-mcp — CLI and MCP server for AI agents on a personal Telegram account
 
-[![CI](https://github.com/stufently/telegram-ai-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/stufently/telegram-ai-cli/actions/workflows/ci.yml)
+[![CI](https://github.com/stufently/telegram-ai-cli-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/stufently/telegram-ai-cli-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue.svg)](#compatibility)
 [![MCP](https://img.shields.io/badge/MCP-stdio-green.svg)](#mcp-tools)
 
-**telegram-ai-cli is a CLI and MCP server, built from one Python codebase, for automating a personal Telegram account over MTProto.** It gives Claude Code, Claude Desktop, Codex, Cursor and other MCP clients task-shaped access to Telegram — read chats, search messages, resolve who a username belongs to, check who's in a group — while anything that changes something on Telegram (sending a message, joining a chat, deleting, promoting an admin) goes through an explicit plan-and-apply step instead of running the moment a model asks for it.
+**telegram-ai-cli-mcp is a CLI and MCP server, built from one Python codebase, for automating a personal Telegram account over MTProto.** It gives Claude Code, Claude Desktop, Codex, Cursor and other MCP clients task-shaped access to Telegram — read chats, search messages, resolve who a username belongs to, check who's in a group — while anything that changes something on Telegram (sending a message, joining a chat, deleting, promoting an admin) goes through an explicit plan-and-apply step instead of running the moment a model asks for it.
 
 It is for people who want an AI agent to have a hand on their own Telegram — triaging messages, drafting replies, watching a chat for something specific — without giving that agent the standing ability to send, join or invite on its own.
 
@@ -91,15 +91,15 @@ $ tg-ai message send --chat 987654321 --text "Meeting moved to 3pm"
 }
 ```
 
-`tg-ai plan show <id>` prints exactly what applying it would do — every field already passed through the same sanitizer that protects the terminal from a hostile chat title or message body (see [`render.py`](telegram_ai_cli/render.py)) — and only `tg-ai plan apply <id>` (with a confirmation prompt, or `--yes` to skip it) actually carries it out.
+`tg-ai plan show <id>` prints exactly what applying it would do — every field already passed through the same sanitizer that protects the terminal from a hostile chat title or message body (see [`render.py`](telegram_ai_cli_mcp/render.py)) — and only `tg-ai plan apply <id>` (with a confirmation prompt, or `--yes` to skip it) actually carries it out.
 
 **The honest limit of this design, stated plainly:** there is no MCP tool that applies a plan, on purpose — a confirmation an agent can send over MCP is a confirmation prompt injection can send. But that boundary is a property of the *transport*, not of the agent. An MCP client that has its own shell — Claude Code, Codex, and comparable coding agents — can simply run `tg-ai plan apply <id>` as a shell command, the same as a person would. Nothing in this project detects or blocks that, because nothing at the process level can tell "the person typed this command" apart from "the agent typed this command" once both share a terminal.
 
-For that class of client, this design does not pretend to hold a hard line at plan/apply. The line it actually offers is: every attempt and every outcome is written to the audit log before and after the RPC ([`audit.py`](telegram_ai_cli/audit.py)), rate limits persist across restarts so an agent (or an injection driving one) cannot out-run them by being restarted ([`limits.py`](telegram_ai_cli/limits.py)), the hard denylist on `777000` (Telegram's login-code chat) and Saved Messages cannot be reconfigured away, and everything an agent is about to approve is sanitized before it reaches a terminal so the text being approved is the text that will actually send ([`render.py`](telegram_ai_cli/render.py)). If your MCP client can run shell commands, **you are trusting the agent**, and the safety net is visibility and limits, not an unbreakable gate. A profile named `full` — direct send with no plan step, from any caller — does not exist in this project; it was considered and rejected. A stronger boundary (a separate OS principal, or a TOTP-gated `apply`) is out of scope for v0.1 and is written up as a path forward in [`docs/threat-model.md`](docs/threat-model.md).
+For that class of client, this design does not pretend to hold a hard line at plan/apply. The line it actually offers is: every attempt and every outcome is written to the audit log before and after the RPC ([`audit.py`](telegram_ai_cli_mcp/audit.py)), rate limits persist across restarts so an agent (or an injection driving one) cannot out-run them by being restarted ([`limits.py`](telegram_ai_cli_mcp/limits.py)), the hard denylist on `777000` (Telegram's login-code chat) and Saved Messages cannot be reconfigured away, and everything an agent is about to approve is sanitized before it reaches a terminal so the text being approved is the text that will actually send ([`render.py`](telegram_ai_cli_mcp/render.py)). If your MCP client can run shell commands, **you are trusting the agent**, and the safety net is visibility and limits, not an unbreakable gate. A profile named `full` — direct send with no plan step, from any caller — does not exist in this project; it was considered and rejected. A stronger boundary (a separate OS principal, or a TOTP-gated `apply`) is out of scope for v0.1 and is written up as a path forward in [`docs/threat-model.md`](docs/threat-model.md).
 
 ### Reading, chats and profiles
 
-Groups and channels are readable as soon as an account is configured; **direct messages are not readable until a chat id is explicitly allowlisted** — an empty `dms` allowlist means none, not all. `777000` (Telegram Service Notifications, where login codes and 2FA resets arrive) and Saved Messages are closed in code and cannot be reopened by any configuration. Every write capability (`send`, `admin`, `join`, profile changes) is fail-closed the same way: an empty list means nothing is permitted until you add to it. Two profiles exist — `readonly` (default: only the read tools work) and `plan` (read, plus creating plans). See [`telegram_ai_cli/safety.py`](telegram_ai_cli/safety.py) for the exact rule order.
+Groups and channels are readable as soon as an account is configured; **direct messages are not readable until a chat id is explicitly allowlisted** — an empty `dms` allowlist means none, not all. `777000` (Telegram Service Notifications, where login codes and 2FA resets arrive) and Saved Messages are closed in code and cannot be reopened by any configuration. Every write capability (`send`, `admin`, `join`, profile changes) is fail-closed the same way: an empty list means nothing is permitted until you add to it. Two profiles exist — `readonly` (default: only the read tools work) and `plan` (read, plus creating plans). See [`telegram_ai_cli_mcp/safety.py`](telegram_ai_cli_mcp/safety.py) for the exact rule order.
 
 ### Importing an existing session
 
@@ -113,15 +113,15 @@ Importing a `tdata` folder from Telegram Desktop is one way to authorize an acco
 Not on PyPI yet. The release pipeline is in place ([Releasing](#releasing)) and publishes from a `v*` tag over Trusted Publishing, but it cannot run until the one-time registration on PyPI's side is done — and claiming a name on a public registry is permanent, so that step is the owner's to take deliberately. Install from source, or build the Docker image.
 
 ```bash
-git clone https://github.com/stufently/telegram-ai-cli.git
-cd telegram-ai-cli
+git clone https://github.com/stufently/telegram-ai-cli-mcp.git
+cd telegram-ai-cli-mcp
 pip install .
 tg-ai --version
 ```
 
 ```bash
-docker build -t telegram-ai-cli .
-docker run --rm telegram-ai-cli tg-ai --version
+docker build -t telegram-ai-cli-mcp .
+docker run --rm telegram-ai-cli-mcp tg-ai --version
 ```
 
 ## Configure
@@ -139,9 +139,9 @@ tg-ai account login-qr --label work     # add --invert if your terminal has a da
 
 `account login-qr` draws a QR code in the terminal and waits for you to scan it in Telegram → **Settings → Devices → Link Desktop Device**. No phone number, no code: the code carries a one-shot login token, and the app that scans it authorizes the session. An unscanned code expires in well under a minute and is redrawn a few times before the command gives up; two-step verification is prompted for exactly as the phone login prompts for it. The raw `tg://login?token=…` URL is printed under the code as a fallback for terminals that can't draw block characters — **treat it as a password**: whatever opens it takes the account. It goes to your terminal and nowhere else — never to the log, the audit file, a command's output or stdout (so redirecting the command into a file can't capture it), and with no terminal at all the command refuses rather than minting a token nobody can see. A label that was never registered is enrolled by this command on its own, so `account add` first is optional.
 
-Account material — the Telethon `.session`, the frozen device fingerprint and (if used) proxy credentials — lands under `~/.local/state/telegram-ai-cli/` with `0700`/`0600` permissions; `api_hash` and proxy secrets are encrypted at rest with a key you control (`TGAI_SECRET_KEY`, or a generated key file — see [`telegram_ai_cli/secretbox.py`](telegram_ai_cli/secretbox.py)).
+Account material — the Telethon `.session`, the frozen device fingerprint and (if used) proxy credentials — lands under `~/.local/state/telegram-ai-cli-mcp/` with `0700`/`0600` permissions; `api_hash` and proxy secrets are encrypted at rest with a key you control (`TGAI_SECRET_KEY`, or a generated key file — see [`telegram_ai_cli_mcp/secretbox.py`](telegram_ai_cli_mcp/secretbox.py)).
 
-Everything else lives in one YAML file, `~/.config/telegram-ai-cli/tgai.yaml` by default (`TGAI_CONFIG` to point elsewhere), overlaid by `TGAI_`-prefixed environment variables (`TGAI_PROFILE`, `TGAI_SAFETY__WRITE__SEND__ALLOW`, and so on — double underscore nests):
+Everything else lives in one YAML file, `~/.config/telegram-ai-cli-mcp/tgai.yaml` by default (`TGAI_CONFIG` to point elsewhere), overlaid by `TGAI_`-prefixed environment variables (`TGAI_PROFILE`, `TGAI_SAFETY__WRITE__SEND__ALLOW`, and so on — double underscore nests):
 
 ```yaml
 profile: plan   # readonly (default) or plan; there is no profile that sends directly
@@ -176,7 +176,7 @@ mcp:
   tools: [telegram_chats, telegram_chat_read]   # omit the key to publish every tool
 ```
 
-`777000` and Saved Messages don't need — and can't get — an entry here; they're closed in [`telegram_ai_cli/config.py`](telegram_ai_cli/config.py), not in this file.
+`777000` and Saved Messages don't need — and can't get — an entry here; they're closed in [`telegram_ai_cli_mcp/config.py`](telegram_ai_cli_mcp/config.py), not in this file.
 
 Every key, its default and the rule order the safety kernel applies them in are in the [configuration reference](docs/configuration.md); every command and tool, with its arguments, is in the [operations reference](docs/operations.md).
 
@@ -204,13 +204,13 @@ the part an agent otherwise has to discover by looking for a send tool and not
 finding one.
 
 ```bash
-claude plugin marketplace add stufently/telegram-ai-cli
-claude plugin install telegram-ai-cli@stufently-telegram
+claude plugin marketplace add stufently/telegram-ai-cli-mcp
+claude plugin install telegram-ai-cli-mcp@stufently-telegram
 ```
 
 The plugin supplies the server definition and the skills; it does not install
 the program. `tg-ai` still has to be on `PATH` — until the first PyPI release
-that means `pipx install git+https://github.com/stufently/telegram-ai-cli`, or
+that means `pipx install git+https://github.com/stufently/telegram-ai-cli-mcp`, or
 this repo checked out and installed — and the account still has to be signed in
 with `tg-ai account login`, because a plugin cannot prompt for a login code.
 
@@ -253,10 +253,10 @@ Same shape as the Claude Desktop block above, in whichever file the client reads
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-v", "/home/you/.config/telegram-ai-cli:/root/.config/telegram-ai-cli",
-        "-v", "/home/you/.local/state/telegram-ai-cli:/root/.local/state/telegram-ai-cli",
+        "-v", "/home/you/.config/telegram-ai-cli-mcp:/root/.config/telegram-ai-cli-mcp",
+        "-v", "/home/you/.local/state/telegram-ai-cli-mcp:/root/.local/state/telegram-ai-cli-mcp",
         "-e", "TGAI_PROFILE=plan",
-        "telegram-ai-cli", "tg-ai", "mcp"
+        "telegram-ai-cli-mcp", "tg-ai", "mcp"
       ]
     }
   }
@@ -367,7 +367,7 @@ No read tool ever marks a chat read — `mark_read` only exists as an explicit p
 
 ## JSON contract
 
-Every command and every tool call returns the same envelope, whether it's the CLI or the MCP server answering (`telegram_ai_cli/envelope.py`) — that's what keeps the MCP server a thin adapter instead of a second implementation.
+Every command and every tool call returns the same envelope, whether it's the CLI or the MCP server answering (`telegram_ai_cli_mcp/envelope.py`) — that's what keeps the MCP server a thin adapter instead of a second implementation.
 
 ```json
 {
@@ -411,7 +411,7 @@ A sender can't close that wrapper: `⟦` and `⟧` are replaced with `[` and `]`
 }
 ```
 
-`retryable` answers exactly one question: may the caller send the identical request again? A policy refusal is never retryable, no matter how many times it's attempted; a flood wait is, once the wait has elapsed. Error codes are a stable enum (`telegram_ai_cli/errors.py`) — renaming one is a breaking change, so they're not string literals scattered through the codebase.
+`retryable` answers exactly one question: may the caller send the identical request again? A policy refusal is never retryable, no matter how many times it's attempted; a flood wait is, once the wait has elapsed. Error codes are a stable enum (`telegram_ai_cli_mcp/errors.py`) — renaming one is a breaking change, so they're not string literals scattered through the codebase.
 
 ## Documentation
 
@@ -419,7 +419,7 @@ A sender can't close that wrapper: `⟦` and `⟧` are replaced with `[` and `]`
 - [Configuration reference](docs/configuration.md) — the full `tgai.yaml`, every environment variable, and what cannot be configured
 - [Security policy](SECURITY.md)
 - [Threat model](docs/threat-model.md)
-- [Design spec](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md)
+- [Design spec](docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 
@@ -433,9 +433,9 @@ That trust is registered against five exact values, and **renaming any of them s
 
 | | |
 | --- | --- |
-| PyPI project name | `telegram-ai-cli` |
+| PyPI project name | `telegram-ai-cli-mcp` |
 | Owner | `stufently` |
-| Repository | `telegram-ai-cli` |
+| Repository | `telegram-ai-cli-mcp` |
 | Workflow file | `release.yml` |
 | Environment | `pypi` |
 
@@ -453,7 +453,7 @@ git push origin v0.1.0
 
 Then review the draft release GitHub created and publish it.
 
-What the pipeline checks before it uploads, because a version on PyPI can never be replaced or re-uploaded: the tag matches `pyproject.toml`; the built file names carry that version; **every** `.py` file in `telegram_ai_cli/` is present and non-empty in both the wheel and the sdist (an unanchored `.gitignore` pattern has shipped an empty package from this repo before); `py.typed` is in the wheel, since `Typing :: Typed` is a lie without it; and `twine check --strict` accepts the metadata PyPI is about to read.
+What the pipeline checks before it uploads, because a version on PyPI can never be replaced or re-uploaded: the tag matches `pyproject.toml`; the built file names carry that version; **every** `.py` file in `telegram_ai_cli_mcp/` is present and non-empty in both the wheel and the sdist (an unanchored `.gitignore` pattern has shipped an empty package from this repo before); `py.typed` is in the wheel, since `Typing :: Typed` is a lie without it; and `twine check --strict` accepts the metadata PyPI is about to read.
 
 ## FAQ
 

@@ -12,9 +12,9 @@ import json
 
 import pytest
 
-from telegram_ai_cli.envelope import Envelope, Meta
-from telegram_ai_cli.errors import ErrorCode, FloodWait, NotAllowlisted, NotFound
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.envelope import Envelope, Meta
+from telegram_ai_cli_mcp.errors import ErrorCode, FloodWait, NotAllowlisted, NotFound
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 # --- success ---------------------------------------------------------------
 

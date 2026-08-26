@@ -35,28 +35,28 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import (
     _LIMIT_KINDS,
     _UPLOAD_OPERATIONS,
     _execute,
     _Prepared,
     _verify,
 )
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     Denylisted,
     InvalidInput,
     NotAllowlisted,
     PlanPreconditionFailed,
     ProfileForbidden,
 )
-from telegram_ai_cli.limits import LimitKind, LimitStore
-from telegram_ai_cli.ops import settings as settings_ops
-from telegram_ai_cli.ops import write
-from telegram_ai_cli.ops.settings import (
+from telegram_ai_cli_mcp.limits import LimitKind, LimitStore
+from telegram_ai_cli_mcp.ops import settings as settings_ops
+from telegram_ai_cli_mcp.ops import write
+from telegram_ai_cli_mcp.ops.settings import (
     BLOCK_USER,
     SETTINGS_OPERATIONS,
     BlockUserInput,
@@ -65,12 +65,12 @@ from telegram_ai_cli.ops.settings import (
     SetChatTitleInput,
     UnblockUserInput,
 )
-from telegram_ai_cli.ops.write import CreateGroupInput
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.plans import PlanState, PlanStore
-from telegram_ai_cli.safety import Capability, PeerKind, PeerRef, SafetyKernel
-from telegram_ai_cli.secretbox import SecretBox
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.ops.write import CreateGroupInput
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.plans import PlanState, PlanStore
+from telegram_ai_cli_mcp.safety import Capability, PeerKind, PeerRef, SafetyKernel
+from telegram_ai_cli_mcp.secretbox import SecretBox
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 # Obviously fake ids, written the way tests/test_no_private_data.py wants them.
 CHANNEL_BASE = -(10**12)
@@ -824,7 +824,7 @@ async def test_applying_a_photo_that_now_replaces_a_different_one_is_refused(
 async def test_applying_a_photo_uploads_the_verified_file(tmp_path, client: FakeClient) -> None:
     from telethon.tl import functions
 
-    from telegram_ai_cli.outbox import resolve_outbound
+    from telegram_ai_cli_mcp.outbox import resolve_outbound
 
     path = an_image(tmp_path)
     ctx = context(tmp_path, client)

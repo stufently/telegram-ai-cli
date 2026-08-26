@@ -24,26 +24,26 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import PlansConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import PlansConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     InvalidInput,
     NotAllowlisted,
     NotFound,
     PlanPreconditionFailed,
     ProfileForbidden,
 )
-from telegram_ai_cli.ops.chats import ChatsInput, handle_chats
-from telegram_ai_cli.ops.folder_write import (
+from telegram_ai_cli_mcp.ops.chats import ChatsInput, handle_chats
+from telegram_ai_cli_mcp.ops.folder_write import (
     FolderAddInput,
     add_peer_to_filter,
     plan_folder_add,
     raw_filter_for,
     recheck_folder,
 )
-from telegram_ai_cli.ops.folders import (
+from telegram_ai_cli_mcp.ops.folders import (
     DialogFacts,
     FolderFlags,
     FoldersInput,
@@ -55,10 +55,10 @@ from telegram_ai_cli.ops.folders import (
     parse_folders,
     resolve_folder,
 )
-from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import PeerKind, SafetyKernel
-from telegram_ai_cli.untrusted import unwrap
+from telegram_ai_cli_mcp.ops.inbox import InboxInput, handle_inbox
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import PeerKind, SafetyKernel
+from telegram_ai_cli_mcp.untrusted import unwrap
 
 # Deliberately small, obviously fake ids (see tests/test_no_private_data.py) —
 # and the marked-id base is written as a power of ten rather than as the
@@ -399,7 +399,7 @@ async def test_a_plan_written_from_a_link_is_verified_against_the_same_chat(
     resolver therefore refused every plan written from a link — at apply time,
     after a person had already approved it.
     """
-    from telegram_ai_cli.apply import _verify
+    from telegram_ai_cli_mcp.apply import _verify
 
     link = "https://t.me/marketing/412"
     client = planning_client(FakeFilterList([FakeFilter(id=2, title="постоянные")]))
@@ -1167,7 +1167,7 @@ def test_what_one_settings_object_states(settings: dict[str, Any], expected: boo
     """
     from telethon.tl import types as tl
 
-    from telegram_ai_cli.ops.folders import _notify_says_muted
+    from telegram_ai_cli_mcp.ops.folders import _notify_says_muted
 
     assert _notify_says_muted(tl.PeerNotifySettings(**settings)) is expected
 
@@ -1180,7 +1180,7 @@ def test_what_one_settings_object_states(settings: dict[str, Any], expected: boo
 def test_an_expiry_that_arrives_as_a_number_is_still_an_expiry(until: int, expected: bool) -> None:
     """Telethon hands over a datetime. Another library, or a fixture, may not —
     and `bool(seconds)` would call every long-expired mute a live one."""
-    from telegram_ai_cli.ops.folders import _notify_says_muted
+    from telegram_ai_cli_mcp.ops.folders import _notify_says_muted
 
     class RawSettings:
         silent = None

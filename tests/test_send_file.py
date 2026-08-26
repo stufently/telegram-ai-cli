@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from telegram_ai_cli.apply import (
+from telegram_ai_cli_mcp.apply import (
     _LIMIT_KINDS,
     _UPLOAD_OPERATIONS,
     RPC_TIMEOUT_SECONDS,
@@ -23,16 +23,16 @@ from telegram_ai_cli.apply import (
     _Prepared,
     _rpc_timeout,
 )
-from telegram_ai_cli.cli import _options_for
-from telegram_ai_cli.config import PathsConfig, Settings, UploadConfig
-from telegram_ai_cli.errors import InvalidInput, PlanPreconditionFailed
-from telegram_ai_cli.limits import LimitKind
-from telegram_ai_cli.ops import write
-from telegram_ai_cli.ops.write import Resolved
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.outbox import resolve_outbound
-from telegram_ai_cli.plans import Plan, PlanState
-from telegram_ai_cli.safety import Capability, PeerKind, PeerRef
+from telegram_ai_cli_mcp.cli import _options_for
+from telegram_ai_cli_mcp.config import PathsConfig, Settings, UploadConfig
+from telegram_ai_cli_mcp.errors import InvalidInput, PlanPreconditionFailed
+from telegram_ai_cli_mcp.limits import LimitKind
+from telegram_ai_cli_mcp.ops import write
+from telegram_ai_cli_mcp.ops.write import Resolved
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.outbox import resolve_outbound
+from telegram_ai_cli_mcp.plans import Plan, PlanState
+from telegram_ai_cli_mcp.safety import Capability, PeerKind, PeerRef
 
 OPERATION = "message.send_file"
 

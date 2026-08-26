@@ -22,10 +22,10 @@ import mcp.types as types
 import pytest
 import yaml
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-from telegram_ai_cli.errors import ErrorCode, InvalidInput
-from telegram_ai_cli.mcp_server import build_server, published_tool_names
-from telegram_ai_cli.opspec import REGISTRY
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+from telegram_ai_cli_mcp.errors import ErrorCode, InvalidInput
+from telegram_ai_cli_mcp.mcp_server import build_server, published_tool_names
+from telegram_ai_cli_mcp.opspec import REGISTRY
 
 
 def config(tmp_path: Path, **body: Any) -> Path:

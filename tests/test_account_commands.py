@@ -18,23 +18,23 @@ from __future__ import annotations
 import click
 import pytest
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-import telegram_ai_cli.ops.accounts as account_ops
-from telegram_ai_cli.accounts.lock import SessionLock, SessionLocks
-from telegram_ai_cli.accounts.login import LoginResult, login_and_register, session_file_lock
-from telegram_ai_cli.accounts.models import AccountSource, AccountStatus
-from telegram_ai_cli.accounts.paths import SessionPaths, session_lock_path, session_lock_paths
-from telegram_ai_cli.cli import _attach
-from telegram_ai_cli.config import PathsConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import AuthRequired, ErrorCode, InvalidInput, SessionLocked
-from telegram_ai_cli.ops.accounts import (
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+import telegram_ai_cli_mcp.ops.accounts as account_ops
+from telegram_ai_cli_mcp.accounts.lock import SessionLock, SessionLocks
+from telegram_ai_cli_mcp.accounts.login import LoginResult, login_and_register, session_file_lock
+from telegram_ai_cli_mcp.accounts.models import AccountSource, AccountStatus
+from telegram_ai_cli_mcp.accounts.paths import SessionPaths, session_lock_path, session_lock_paths
+from telegram_ai_cli_mcp.cli import _attach
+from telegram_ai_cli_mcp.config import PathsConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import AuthRequired, ErrorCode, InvalidInput, SessionLocked
+from telegram_ai_cli_mcp.ops.accounts import (
     AddAccountInput,
     LoginInput,
     handle_account_add,
     handle_account_login,
 )
-from telegram_ai_cli.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
 
 ACCOUNT_OPERATIONS = ("account.add", "account.login")
 
@@ -214,7 +214,7 @@ async def test_a_discovered_phone_mismatch_records_the_session_identity(
     tmp_path, monkeypatch
 ) -> None:
     """A refused argument must not leave its false value in an otherwise valid row."""
-    from telegram_ai_cli.accounts import login as login_mod
+    from telegram_ai_cli_mcp.accounts import login as login_mod
 
     async def authorised(**kwargs):
         return LoginResult(
@@ -244,7 +244,7 @@ async def test_a_discovered_phone_mismatch_records_the_session_identity(
 
 async def test_a_failed_replacement_restores_the_old_row_and_session(tmp_path, monkeypatch) -> None:
     """Replacement is published only after authorisation succeeds."""
-    from telegram_ai_cli.accounts import login as login_mod
+    from telegram_ai_cli_mcp.accounts import login as login_mod
 
     sessions = tmp_path / "sessions"
     sessions.mkdir()
@@ -399,7 +399,7 @@ async def test_the_login_itself_still_takes_the_lock_when_nobody_handed_it_one(
     direct `interactive_login`, which the tests and any future caller use — is
     the one with no caller holding anything.
     """
-    from telegram_ai_cli.accounts import login as login_mod
+    from telegram_ai_cli_mcp.accounts import login as login_mod
 
     paths = SessionPaths(tmp_path / "sessions", "solo")
     holder = SessionLock(session_file_lock(paths)).acquire()
@@ -477,7 +477,7 @@ async def test_a_qr_login_on_a_connected_account_changes_nothing(tmp_path) -> No
     Its docstring says as much; before this it was true of the write and not of
     the lock, in both flows.
     """
-    from telegram_ai_cli.accounts.login import qr_login_and_register
+    from telegram_ai_cli_mcp.accounts.login import qr_login_and_register
 
     with context_over(tmp_path) as ctx:
         registry = ctx.accounts

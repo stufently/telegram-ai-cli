@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from telegram_ai_cli.links import format_message_link, parse_telegram_link
+from telegram_ai_cli_mcp.links import format_message_link, parse_telegram_link
 
 # --- parsing ---------------------------------------------------------------
 

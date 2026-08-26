@@ -41,19 +41,19 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     Denylisted,
     InsecurePermissions,
     InvalidInput,
     NotAllowlisted,
 )
-from telegram_ai_cli.limits import LimitStore
-from telegram_ai_cli.ops import archive as archive_ops
-from telegram_ai_cli.ops.archive import (
+from telegram_ai_cli_mcp.limits import LimitStore
+from telegram_ai_cli_mcp.ops import archive as archive_ops
+from telegram_ai_cli_mcp.ops.archive import (
     ARCHIVE_PAGE,
     ArchiveForgetInput,
     ArchiveSearchInput,
@@ -64,11 +64,11 @@ from telegram_ai_cli.ops.archive import (
     handle_archive_status,
     handle_archive_sync,
 )
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import SafetyKernel
-from telegram_ai_cli.secretbox import SecretBox
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import SafetyKernel
+from telegram_ai_cli_mcp.secretbox import SecretBox
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 BASE = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
@@ -627,7 +627,7 @@ def _corrupt_kind(kind: str = "supergroup") -> None:
     Only a database written by something other than this project can look like
     this, which is exactly the case the archive doc promises to survive.
     """
-    from telegram_ai_cli.archive import connect_archive
+    from telegram_ai_cli_mcp.archive import connect_archive
 
     conn = connect_archive(Settings().paths.archive)
     conn.execute("UPDATE archived_chats SET kind = ?", (kind,))
@@ -848,7 +848,7 @@ def test_erasing_is_published_as_destructive_and_idempotent() -> None:
     lie; and a delete that claimed not to be idempotent invites a caller to
     avoid a retry that is perfectly safe.
     """
-    from telegram_ai_cli.mcp_server import _tool_for
+    from telegram_ai_cli_mcp.mcp_server import _tool_for
 
     forget = _tool_for(REGISTRY.by_name("archive.forget"), plan=False)
     assert forget.annotations.destructive_hint is True

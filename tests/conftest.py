@@ -9,10 +9,10 @@ from typing import Any
 import pytest
 from fakes import FakeRegistry
 
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.safety import SafetyKernel
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.safety import SafetyKernel
 
 
 @pytest.fixture

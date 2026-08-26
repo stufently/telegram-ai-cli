@@ -28,23 +28,23 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import _outbound_fingerprint, _refuse_duplicate, apply_plan
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import LedgerConfig, PlansConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import DuplicateOutbound, ErrorCode
-from telegram_ai_cli.ledger import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import _outbound_fingerprint, _refuse_duplicate, apply_plan
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import LedgerConfig, PlansConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import DuplicateOutbound, ErrorCode
+from telegram_ai_cli_mcp.ledger import (
     LEDGERED_OPERATIONS,
     OutboundLedger,
     fingerprint,
     normalise_body,
 )
-from telegram_ai_cli.limits import LimitStore
-from telegram_ai_cli.ops import write
-from telegram_ai_cli.ops.write import SendMessageInput
-from telegram_ai_cli.plans import PlanState, PlanStore
-from telegram_ai_cli.safety import SafetyKernel
+from telegram_ai_cli_mcp.limits import LimitStore
+from telegram_ai_cli_mcp.ops import write
+from telegram_ai_cli_mcp.ops.write import SendMessageInput
+from telegram_ai_cli_mcp.plans import PlanState, PlanStore
+from telegram_ai_cli_mcp.safety import SafetyKernel
 
 CHANNEL_BASE = -(10**12)
 GROUP_ID = CHANNEL_BASE - 4242
@@ -624,7 +624,7 @@ def test_a_context_without_a_database_refuses_rather_than_waving_it_through(
     tmp_path: Path,
 ) -> None:
     """Fail closed. A missing ledger is a broken installation, not permission."""
-    from telegram_ai_cli.errors import InvalidInput
+    from telegram_ai_cli_mcp.errors import InvalidInput
 
     ctx = context(tmp_path)
     ctx.ledger = None

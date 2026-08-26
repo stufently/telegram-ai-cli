@@ -13,7 +13,7 @@
 # registered against are load-bearing, not decorative:
 #
 #     owner        stufently
-#     repository   telegram-ai-cli
+#     repository   telegram-ai-cli-mcp
 #     workflow     release.yml        <- the *file name* of this file
 #     environment  pypi               <- the `environment:` on publish-pypi
 #
@@ -114,7 +114,7 @@ jobs:
       # for a different version than the tag, and an archive that validates,
       # uploads and installs while containing none of the code. The second has
       # happened in this repository — an unanchored `accounts/` in .gitignore
-      # excluded the `telegram_ai_cli/accounts/` source package, and a shared
+      # excluded the `telegram_ai_cli_mcp/accounts/` source package, and a shared
       # build directory once shipped an empty `__init__.py` (see CHANGELOG).
       # So the archives are compared against the working tree, not spot-checked.
       - name: The archives carry this version, and all of the package
@@ -132,7 +132,7 @@ jobs:
           from packaging.version import Version
 
           version = Version(os.environ["GIT_TAG"].removeprefix("v"))
-          name = canonicalize_name("telegram-ai-cli")
+          name = canonicalize_name("telegram-ai-cli-mcp")
 
           dist = Path("dist")
           wheels = sorted(dist.glob("*.whl"))
@@ -157,7 +157,7 @@ jobs:
               if built_version != version:
                   sys.exit(f"::error::{label} is version {built_version}, tag says {version}")
 
-          expected = {str(p) for p in Path("telegram_ai_cli").rglob("*.py")}
+          expected = {str(p) for p in Path("telegram_ai_cli_mcp").rglob("*.py")}
           if not expected:
               sys.exit("::error::no source files found to check the archives against")
 
@@ -186,7 +186,7 @@ jobs:
           # `Typing :: Typed` classifier is a lie without it, and the lie is
           # invisible until a downstream type checker quietly ignores this
           # package.
-          if "telegram_ai_cli/py.typed" not in wheel_names:
+          if "telegram_ai_cli_mcp/py.typed" not in wheel_names:
               sys.exit("::error::wheel ships no py.typed, but pyproject claims Typing :: Typed")
           print(f"{len(expected)} source files present and non-empty in both archives")
           PY
@@ -225,7 +225,7 @@ jobs:
       # Registered on PyPI as this project's trusted publisher environment.
       # The name is part of the trust relationship — see the header.
       name: pypi
-      url: https://pypi.org/project/telegram-ai-cli/
+      url: https://pypi.org/project/telegram-ai-cli-mcp/
     permissions:
       # The only elevated permission anywhere in this workflow, and it is on
       # the one job that needs it: an OIDC token exchanged for a short-lived

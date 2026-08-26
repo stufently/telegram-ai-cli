@@ -989,6 +989,16 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Changed
 
+- **2026-08-26 — project renamed to `telegram-ai-cli-mcp`.** The installable
+  Python project is now `telegram-ai-cli-mcp`, its import package is
+  `telegram_ai_cli_mcp`, and the MCP server identifies itself as
+  `telegram-ai-cli-mcp`; the `tg-ai` command is unchanged. New installations
+  use `~/.config/telegram-ai-cli-mcp/` for configuration and
+  `~/.local/state/telegram-ai-cli-mcp/` for state, and the Claude Code plugin
+  identifier is now `telegram-ai-cli-mcp`. Existing data is not migrated
+  automatically, so users upgrading an existing checkout should move their
+  configuration and state directories before starting the renamed package.
+
 - **List and object arguments have a CLI form.** The generator in `cli.py`
   derives every option from a Pydantic field, and it mapped `list[int]` to a
   single `int` and a nested model to a bare string — so `chat restrict`

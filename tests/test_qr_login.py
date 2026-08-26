@@ -27,10 +27,10 @@ import click
 import pytest
 from telethon import errors
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-import telegram_ai_cli.ops.accounts as account_ops
-from telegram_ai_cli.accounts import login as login_mod
-from telegram_ai_cli.accounts.login import (
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+import telegram_ai_cli_mcp.ops.accounts as account_ops
+from telegram_ai_cli_mcp.accounts import login as login_mod
+from telegram_ai_cli_mcp.accounts.login import (
     DEFAULT_QR_REGENERATIONS,
     LoginResult,
     _sign_in_via_qr,
@@ -38,14 +38,14 @@ from telegram_ai_cli.accounts.login import (
     qr_login_and_register,
     show_qr,
 )
-from telegram_ai_cli.accounts.models import AccountSource, AccountStatus
-from telegram_ai_cli.accounts.qr import render_qr
-from telegram_ai_cli.cli import _attach
-from telegram_ai_cli.config import PathsConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import AuthRequired, FloodWait, InvalidInput
-from telegram_ai_cli.ops.accounts import QrLoginInput, handle_account_login_qr
-from telegram_ai_cli.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.accounts.models import AccountSource, AccountStatus
+from telegram_ai_cli_mcp.accounts.qr import render_qr
+from telegram_ai_cli_mcp.cli import _attach
+from telegram_ai_cli_mcp.config import PathsConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import AuthRequired, FloodWait, InvalidInput
+from telegram_ai_cli_mcp.ops.accounts import QrLoginInput, handle_account_login_qr
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
 
 # Invented credentials: the assertions below are that neither reaches a log, an
 # audit record or an envelope, so they have to look like the real thing.

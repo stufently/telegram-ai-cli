@@ -51,7 +51,7 @@ representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported through [GitHub Security Advisories](https://github.com/stufently/telegram-ai-cli/security/advisories/new)
+reported through [GitHub Security Advisories](https://github.com/stufently/telegram-ai-cli-mcp/security/advisories/new)
 or by opening a report as directed in the repository. All complaints will be
 reviewed and investigated promptly and fairly.
 

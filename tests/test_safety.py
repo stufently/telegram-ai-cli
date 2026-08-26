@@ -14,15 +14,15 @@ import os
 
 import pytest
 
-from telegram_ai_cli.config import Settings, load_settings
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp.config import Settings, load_settings
+from telegram_ai_cli_mcp.errors import (
     Denylisted,
     ErrorCode,
     NotAllowlisted,
     PolicyError,
     ProfileForbidden,
 )
-from telegram_ai_cli.safety import (
+from telegram_ai_cli_mcp.safety import (
     REMOTE_WRITE_CAPABILITIES,
     Capability,
     PeerKind,
@@ -74,7 +74,7 @@ def test_write_allow_lists_start_empty() -> None:
 def test_state_paths_follow_xdg_state_home(tmp_path) -> None:
     """Nothing is written to the real home directory, in tests or in use."""
     paths = Settings().paths
-    root = tmp_path / "state" / "telegram-ai-cli"
+    root = tmp_path / "state" / "telegram-ai-cli-mcp"
     assert paths.state == root
     assert paths.sessions == root / "sessions"
     assert paths.audit_log == root / "audit.jsonl"

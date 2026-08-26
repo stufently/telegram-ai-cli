@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-from telegram_ai_cli.opspec import REGISTRY
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+from telegram_ai_cli_mcp.opspec import REGISTRY
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO_ROOT / ".claude-plugin"
@@ -49,7 +49,10 @@ def published_names() -> set[str]:
 def test_the_plugin_manifest_is_json_and_points_at_files_that_exist() -> None:
     manifest = json.loads((PLUGIN_DIR / "plugin.json").read_text())
 
-    assert manifest["name"] == "telegram-ai-cli"
+    assert manifest["name"] == "telegram-ai-cli-mcp"
+    expected_repository = "https://github.com/stufently/telegram-ai-cli-mcp"
+    assert manifest["homepage"] == expected_repository
+    assert manifest["repository"] == expected_repository
     for key in ("mcpServers", "skills"):
         # `removeprefix`, not `lstrip`: `lstrip("./")` strips *characters*, so it
         # eats the leading dot of `./.claude/skills/` and looks for a directory

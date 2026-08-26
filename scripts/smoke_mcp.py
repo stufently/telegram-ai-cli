@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke-test the MCP server end to end over stdio.
 
-Importing telegram_ai_cli.mcp_server does NOT prove the server works: the
+Importing telegram_ai_cli_mcp.mcp_server does NOT prove the server works: the
 module can import cleanly and the process can still hang on startup, never
 answer a request, or crash right after accepting the first line. A CI step
 that only imports the module (or launches it in the background and moves on)
@@ -108,7 +108,7 @@ async def main() -> None:
         _fail(
             "`tg-ai` is not on PATH. Either the package is not installed in "
             "this environment, or the `tg-ai` console script does not exist "
-            "yet (telegram_ai_cli.cli:main)."
+            "yet (telegram_ai_cli_mcp.cli:main)."
         )
 
     try:
@@ -143,7 +143,7 @@ async def main() -> None:
                 "params": {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {},
-                    "clientInfo": {"name": "telegram-ai-cli-smoke-test", "version": "0"},
+                    "clientInfo": {"name": "telegram-ai-cli-mcp-smoke-test", "version": "0"},
                 },
             },
         )

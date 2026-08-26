@@ -12,9 +12,9 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, Field
 
-from telegram_ai_cli.errors import ErrorCode, InvalidInput, UnknownOperation
-from telegram_ai_cli.opspec import REGISTRY, Effect, Operation, Registry
-from telegram_ai_cli.safety import Capability
+from telegram_ai_cli_mcp.errors import ErrorCode, InvalidInput, UnknownOperation
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect, Operation, Registry
+from telegram_ai_cli_mcp.safety import Capability
 
 
 class ReadInput(BaseModel):
@@ -330,7 +330,7 @@ def test_every_operation_module_is_wired_into_the_package() -> None:
     import ast
     from pathlib import Path
 
-    import telegram_ai_cli.ops as ops_package
+    import telegram_ai_cli_mcp.ops as ops_package
 
     directory = Path(ops_package.__file__).parent
     on_disk = {

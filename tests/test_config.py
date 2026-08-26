@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from telegram_ai_cli.config import Settings, load_settings
+from telegram_ai_cli_mcp.config import Settings, load_settings
 
 
 @pytest.fixture(autouse=True)

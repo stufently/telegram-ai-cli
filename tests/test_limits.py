@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.config import LimitsConfig
-from telegram_ai_cli.errors import ErrorCode, LimitExceeded
-from telegram_ai_cli.limits import LimitKind, LimitStore
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.config import LimitsConfig
+from telegram_ai_cli_mcp.errors import ErrorCode, LimitExceeded
+from telegram_ai_cli_mcp.limits import LimitKind, LimitStore
 
 
 @pytest.fixture(autouse=True)

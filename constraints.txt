@@ -8,7 +8,7 @@
 #
 # Update deliberately, not by drift: bump a line here only after checking the
 # new release notes, never by blindly running `pip install -U`. Verified fresh
-# as of 2026-08-23 — see docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md §3.
+# as of 2026-08-23 — see docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md §3.
 telethon==1.44.0
 cryptg==0.6.0
 opentele-ng==1.4.0

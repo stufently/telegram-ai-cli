@@ -18,13 +18,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from telegram_ai_cli.config import (
+from telegram_ai_cli_mcp.config import (
     TELEGRAM_MAX_UPLOAD_BYTES,
     PathsConfig,
     Settings,
     UploadConfig,
 )
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp.errors import (
     ArtifactTooLarge,
     ErrorCode,
     InsecurePermissions,
@@ -32,7 +32,7 @@ from telegram_ai_cli.errors import (
     NotAllowlisted,
     NotFound,
 )
-from telegram_ai_cli.outbox import (
+from telegram_ai_cli_mcp.outbox import (
     Delivery,
     describe_delivery,
     file_preview,

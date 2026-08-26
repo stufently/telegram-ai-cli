@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-from telegram_ai_cli.mcp_server import build_server
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+from telegram_ai_cli_mcp.mcp_server import build_server
 
 
 def test_the_server_can_be_built() -> None:
@@ -71,8 +71,8 @@ async def test_the_reaction_reader_is_published_as_a_read_tool() -> None:
 
 def test_the_instructions_teach_the_untrusted_markers() -> None:
     """A marker a client is never told about is a marker it cannot honour."""
-    from telegram_ai_cli.mcp_server import INSTRUCTIONS
-    from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+    from telegram_ai_cli_mcp.mcp_server import INSTRUCTIONS
+    from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
     assert OPEN_MARKER in INSTRUCTIONS
     assert CLOSE_MARKER in INSTRUCTIONS

@@ -28,18 +28,18 @@ from telethon import utils
 from telethon.tl import types as tl
 from telethon.tl.functions.messages import GetPeerDialogsRequest
 
-import telegram_ai_cli.ops.fleet as fleet_ops
-import telegram_ai_cli.ops.inbox as inbox_ops
-from telegram_ai_cli.errors import InvalidInput, NotAllowlisted
-from telegram_ai_cli.ops.chats import (
+import telegram_ai_cli_mcp.ops.fleet as fleet_ops
+import telegram_ai_cli_mcp.ops.inbox as inbox_ops
+from telegram_ai_cli_mcp.errors import InvalidInput, NotAllowlisted
+from telegram_ai_cli_mcp.ops.chats import (
     ChatMembersInput,
     ChatReadInput,
     handle_chat_members,
     handle_chat_read,
 )
-from telegram_ai_cli.ops.fleet import FleetInput, handle_fleet
-from telegram_ai_cli.ops.inbox import InboxInput, handle_inbox
-from telegram_ai_cli.ops.pending import DraftsInput, handle_drafts
+from telegram_ai_cli_mcp.ops.fleet import FleetInput, handle_fleet
+from telegram_ai_cli_mcp.ops.inbox import InboxInput, handle_inbox
+from telegram_ai_cli_mcp.ops.pending import DraftsInput, handle_drafts
 
 GROUP_ID = 4242
 OTHER_GROUP_ID = 4343
@@ -383,7 +383,7 @@ async def test_a_failed_fleet_probe_does_not_claim_the_account_is_signed_out(
     itself rejected earns the false; everything else stays unknown, with the
     reason on the row.
     """
-    from telegram_ai_cli.errors import SessionLocked, SessionRevoked
+    from telegram_ai_cli_mcp.errors import SessionLocked, SessionRevoked
 
     ctx = make_context(FakeClient())
 

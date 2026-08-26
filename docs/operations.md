@@ -1,7 +1,7 @@
 # Operations reference
 
 Every capability of this tool is declared once, as an `Operation` in
-[`opspec.py`](../telegram_ai_cli/opspec.py). The CLI renders that declaration
+[`opspec.py`](../telegram_ai_cli_mcp/opspec.py). The CLI renders that declaration
 into a command, the MCP server renders it into a tool, and `tg-ai schema`
 prints its JSON Schema. Nothing here is written twice, which is why this page
 can be read as authoritative for both surfaces at once: a command and its tool
@@ -823,7 +823,7 @@ So the decision follows this repository's own rules rather than Telegram's:
   asked — *is this session on the same network as my others, or on another
   continent?* — and it is the part that stays true when the payload is pasted
   somewhere else. A full address identifies a home connection precisely.
-  [`redact.py`](../telegram_ai_cli/redact.py) masks values recognisable by
+  [`redact.py`](../telegram_ai_cli_mcp/redact.py) masks values recognisable by
   shape, and this repository's own privacy scan
   ([`tests/test_no_private_data.py`](../tests/test_no_private_data.py)) treats
   an IP address as private data by exactly that standard; a full address in the
@@ -1466,7 +1466,7 @@ Send a file as work to "Release team" @releases id=-1001234567890 kind=group
   size:     8.4 MiB (8830464 bytes)
   type:     application/gzip
   sha256:   9f2c…c41b
-  from:     /home/you/.local/state/telegram-ai-cli/uploads
+  from:     /home/you/.local/state/telegram-ai-cli-mcp/uploads
   sent:     as a document — Telegram has no compressed form for this type, so the bytes arrive unchanged
 --- caption (34 chars) ---
 The build everyone has been waiting for

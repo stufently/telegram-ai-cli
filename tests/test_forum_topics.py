@@ -23,16 +23,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.errors import ErrorCode, InvalidInput, NotFound
-from telegram_ai_cli.links import parse_telegram_link
-from telegram_ai_cli.ops._common import telegram_result
-from telegram_ai_cli.ops._serialize import is_forum, topic_summary
-from telegram_ai_cli.ops.chats import guard_topic_filter, history_kwargs, topic_id_from
-from telegram_ai_cli.ops.topics import ChatTopicsInput, _next_topic_cursor, require_forum
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.safety import Capability, PeerKind, PeerRef
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.errors import ErrorCode, InvalidInput, NotFound
+from telegram_ai_cli_mcp.links import parse_telegram_link
+from telegram_ai_cli_mcp.ops._common import telegram_result
+from telegram_ai_cli_mcp.ops._serialize import is_forum, topic_summary
+from telegram_ai_cli_mcp.ops.chats import guard_topic_filter, history_kwargs, topic_id_from
+from telegram_ai_cli_mcp.ops.topics import ChatTopicsInput, _next_topic_cursor, require_forum
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.safety import Capability, PeerKind, PeerRef
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 #: The one supergroup id this repo is allowed to write down (see
 #: `test_no_private_data`); the three refs differ in what they are, not in id.

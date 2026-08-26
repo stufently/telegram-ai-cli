@@ -28,11 +28,11 @@ import mcp.types as types
 import pytest
 import yaml
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-from telegram_ai_cli.errors import ErrorCode, NotAllowlisted
-from telegram_ai_cli.mcp_server import build_server
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.roots import (
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+from telegram_ai_cli_mcp.errors import ErrorCode, NotAllowlisted
+from telegram_ai_cli_mcp.mcp_server import build_server
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.roots import (
     advertised_roots,
     is_within,
     require_within_roots,
@@ -245,7 +245,7 @@ def test_every_local_write_declares_the_path_it_writes(tmp_path: Path) -> None:
     a directory it never touches, and lets one through on the strength of a
     directory it never touches either.
     """
-    from telegram_ai_cli.config import PathsConfig
+    from telegram_ai_cli_mcp.config import PathsConfig
 
     writes = [op for op in REGISTRY.all() if op.effect is Effect.LOCAL_WRITE]
 

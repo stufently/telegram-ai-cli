@@ -24,7 +24,7 @@ tg-ai ...
 
 ## Environment
 
-- `telegram-ai-cli` version:
+- `telegram-ai-cli-mcp` version:
 - Python version:
 - OS:
 - Installed via: (pip / Docker / source)

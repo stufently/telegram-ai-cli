@@ -37,11 +37,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from telegram_ai_cli import db, transcribe
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db, transcribe
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     ArtifactTooLarge,
     Denylisted,
     ErrorCode,
@@ -49,13 +49,13 @@ from telegram_ai_cli.errors import (
     TranscriberUnavailable,
     TranscriptionFailed,
 )
-from telegram_ai_cli.limits import LimitStore
-from telegram_ai_cli.ops.transcribe import TranscribeInput, handle_media_transcribe
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import Capability, SafetyKernel
-from telegram_ai_cli.secretbox import SecretBox
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.limits import LimitStore
+from telegram_ai_cli_mcp.ops.transcribe import TranscribeInput, handle_media_transcribe
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import Capability, SafetyKernel
+from telegram_ai_cli_mcp.secretbox import SecretBox
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 # --- a Telegram, and a container, that are entirely local --------------------
 

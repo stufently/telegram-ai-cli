@@ -8,17 +8,17 @@
 UID ?= $(shell id -u)
 GID ?= $(shell id -g)
 
-IMAGE ?= telegram-ai-cli
-TEST_IMAGE ?= telegram-ai-cli-test
+IMAGE ?= telegram-ai-cli-mcp
+TEST_IMAGE ?= telegram-ai-cli-mcp-test
 RUFF_IMAGE := ghcr.io/astral-sh/ruff:0.16.4
 
 # The optional transcription image. Deliberately NOT built by `make build`:
 # nothing else needs it, and an installation that does not want local speech-to-
 # text should not be downloading half a gigabyte of model weights to find out.
 # Must match `transcribe.image` and `transcribe.model_cache` in the config.
-TRANSCRIBE_IMAGE ?= telegram-ai-cli-transcribe:latest
+TRANSCRIBE_IMAGE ?= telegram-ai-cli-mcp-transcribe:latest
 STATE_HOME ?= $(if $(XDG_STATE_HOME),$(XDG_STATE_HOME),$(HOME)/.local/state)
-TRANSCRIBE_CACHE ?= $(STATE_HOME)/telegram-ai-cli/whisper-models
+TRANSCRIBE_CACHE ?= $(STATE_HOME)/telegram-ai-cli-mcp/whisper-models
 
 # Empty by default so `make test` alone runs the whole suite via Dockerfile.test's
 # CMD; set it to target specific tests, e.g. `make test PYTEST_ARGS="-k plans -x"`.

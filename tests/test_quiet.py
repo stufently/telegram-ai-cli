@@ -24,18 +24,18 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import _LIMIT_KINDS
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import PeerRule, PlansConfig, SafetyConfig, Settings, WritePolicy
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import _LIMIT_KINDS
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import PeerRule, PlansConfig, SafetyConfig, Settings, WritePolicy
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     InvalidInput,
     NotAllowlisted,
     PlanPreconditionFailed,
     ProfileForbidden,
 )
-from telegram_ai_cli.ops.quiet import (
+from telegram_ai_cli_mcp.ops.quiet import (
     ARCHIVE_CHAT,
     ARCHIVE_FOLDER_ID,
     MAIN_FOLDER_ID,
@@ -50,9 +50,9 @@ from telegram_ai_cli.ops.quiet import (
     recheck_archive,
     recheck_mute,
 )
-from telegram_ai_cli.opspec import Effect
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import Capability, SafetyKernel
+from telegram_ai_cli_mcp.opspec import Effect
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import Capability, SafetyKernel
 
 CHANNEL_BASE = -(10**12)
 GROUP_ID = CHANNEL_BASE - 4242
@@ -399,16 +399,16 @@ class RecordingClient(FakeClient):
 
 
 def prepared_for(peer_id: int) -> Any:
-    from telegram_ai_cli.apply import _Prepared
-    from telegram_ai_cli.ops.write import Resolved
-    from telegram_ai_cli.safety import PeerKind, PeerRef
+    from telegram_ai_cli_mcp.apply import _Prepared
+    from telegram_ai_cli_mcp.ops.write import Resolved
+    from telegram_ai_cli_mcp.safety import PeerKind, PeerRef
 
     resolved = Resolved(ref=PeerRef(peer_id=peer_id, kind=PeerKind.GROUP, title="Marketing"))
     return _Prepared(limit_target=str(peer_id), peers={"chat": resolved})
 
 
 def plan_for(operation: str, params: Any) -> Any:
-    from telegram_ai_cli.plans import Plan, PlanState
+    from telegram_ai_cli_mcp.plans import Plan, PlanState
 
     return Plan(
         plan_id="0" * 32,
@@ -430,7 +430,7 @@ def plan_for(operation: str, params: Any) -> Any:
 async def test_archiving_moves_the_peer_into_the_folder_it_said(
     archived: bool, folder: int
 ) -> None:
-    from telegram_ai_cli.apply import _execute
+    from telegram_ai_cli_mcp.apply import _execute
 
     params = ArchiveChatInput(chat=GROUP_ID, archived=archived)
     client = RecordingClient({})
@@ -446,7 +446,7 @@ async def test_archiving_moves_the_peer_into_the_folder_it_said(
 @pytest.mark.asyncio
 async def test_muting_sends_a_deadline_and_unmuting_sends_zero() -> None:
     """Zero is a value Telegram reads as "not muted", not an absent field."""
-    from telegram_ai_cli.apply import _execute
+    from telegram_ai_cli_mcp.apply import _execute
 
     client = RecordingClient({})
     muting = MuteChatInput(chat=GROUP_ID, duration_seconds=HOUR)
@@ -466,7 +466,7 @@ async def test_muting_sends_a_deadline_and_unmuting_sends_zero() -> None:
 
 @pytest.mark.asyncio
 async def test_an_indefinite_mute_sends_the_sentinel() -> None:
-    from telegram_ai_cli.apply import _execute
+    from telegram_ai_cli_mcp.apply import _execute
 
     params = MuteChatInput(chat=GROUP_ID)
     client = RecordingClient({})

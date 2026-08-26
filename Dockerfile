@@ -6,7 +6,7 @@
 # application code never invalidates the (slow) dependency layer.
 #
 # Python 3.14 is the newest maintained CPython branch (EOL 2030-10-31) — see
-# docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md §3. Do not
+# docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md §3. Do not
 # downgrade to 3.12/3.13 here; those remain supported only as the floor in
 # pyproject.toml and as CI matrix entries.
 FROM python:3.14-slim AS builder
@@ -33,7 +33,7 @@ COPY pyproject.toml constraints.txt ./
 # setuptools needs *something* under the package dir to validate the build
 # metadata at this stage; a minimal placeholder keeps the dependency-only
 # install self-contained without pulling in real source yet.
-RUN mkdir -p telegram_ai_cli && touch telegram_ai_cli/__init__.py
+RUN mkdir -p telegram_ai_cli_mcp && touch telegram_ai_cli_mcp/__init__.py
 
 # `pip install .` (rather than `pip install -e .`) here only resolves and
 # installs the dependency graph pinned by constraints.txt; the real package is
@@ -42,7 +42,7 @@ RUN pip install -c constraints.txt .
 
 # Build the real package somewhere the placeholder never touched. Sharing one
 # directory silently shipped a BROKEN image: the placeholder install leaves
-# setuptools' build/lib/telegram_ai_cli/__init__.py behind as an empty file
+# setuptools' build/lib/telegram_ai_cli_mcp/__init__.py behind as an empty file
 # stamped at build time, and build_py copies a source file only when it is
 # newer than its destination. The real __init__.py keeps its original mtime,
 # loses that comparison, and never makes it into the wheel — while every other
@@ -52,7 +52,7 @@ RUN pip install -c constraints.txt .
 # the already-installed placeholder "already satisfied" and skip this entirely.
 WORKDIR /build
 COPY pyproject.toml constraints.txt ./
-COPY telegram_ai_cli/ ./telegram_ai_cli/
+COPY telegram_ai_cli_mcp/ ./telegram_ai_cli_mcp/
 RUN pip install -c constraints.txt --no-deps --force-reinstall .
 
 # --- runtime -----------------------------------------------------------------

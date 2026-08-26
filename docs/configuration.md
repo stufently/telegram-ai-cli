@@ -1,7 +1,7 @@
 # Configuration reference
 
 Everything on this page is defined in
-[`config.py`](../telegram_ai_cli/config.py) and read exactly once per process
+[`config.py`](../telegram_ai_cli_mcp/config.py) and read exactly once per process
 into a `Settings` object. Policy decisions are made against *that* object, never
 against text arriving through a tool call — which is why nothing in a message,
 a chat title or a tool argument can widen what follows.
@@ -21,7 +21,7 @@ correspondence is the part worth gating, and it is gated.
 
 ## Where settings come from
 
-1. `~/.config/telegram-ai-cli/tgai.yaml` — or wherever `TGAI_CONFIG` points, or
+1. `~/.config/telegram-ai-cli-mcp/tgai.yaml` — or wherever `TGAI_CONFIG` points, or
    `tg-ai --config <path>`.
 2. `TGAI_`-prefixed environment variables, which **win** over the file.
 
@@ -52,7 +52,7 @@ passwords and documents precisely because it feels private.
 Both are constants in `config.py`, not defaults: there is **no settings key for
 either**, so no YAML value, no environment variable and no text arriving through
 a tool can reopen them. The check runs ahead of every allow and deny list in
-[`safety.py`](../telegram_ai_cli/safety.py), and a test asserts that `Settings`
+[`safety.py`](../telegram_ai_cli_mcp/safety.py), and a test asserts that `Settings`
 has no attribute that would let it be overridden
 ([`tests/test_denylist.py`](../tests/test_denylist.py)).
 
@@ -62,7 +62,7 @@ It was considered and rejected; see the [threat model](threat-model.md).
 **Neither is the trust boundary in tool output.** Every value a person outside
 this system wrote — message body, media caption, display name, chat title — is
 delimited with `⟦untrusted⟧ … ⟦/untrusted⟧` before a result leaves
-([`untrusted.py`](../telegram_ai_cli/untrusted.py)), and there is no key to turn
+([`untrusted.py`](../telegram_ai_cli_mcp/untrusted.py)), and there is no key to turn
 that off. A switch here would be a switch for making injected text
 indistinguishable from this tool's own fields again, which is the failure the
 markers exist to prevent. The same is true of redaction: `redact_output` is read
@@ -107,7 +107,7 @@ visible in `ps` to every user on the host and lands in shell history, so the
 credential arrives through the environment or the config file instead. The same
 rule is why the two-step verification password is only ever read from an
 interactive prompt — see
-[`accounts/login.py`](../telegram_ai_cli/accounts/login.py).
+[`accounts/login.py`](../telegram_ai_cli_mcp/accounts/login.py).
 
 A frozen fingerprint matters beyond convenience: a device fingerprint that
 changes between restarts looks exactly like a session someone stole and is
@@ -117,12 +117,12 @@ replaying from their own machine, which is a good way to have it killed.
 
 | Key | Default | Holds |
 | --- | --- | --- |
-| `paths.sessions` | `$XDG_STATE_HOME/telegram-ai-cli/sessions` (else `~/.local/state/…`) | `.session` files, device fingerprints, session locks |
-| `paths.state` | `$XDG_STATE_HOME/telegram-ai-cli` | `state.db` (accounts, plans, rate limits) and `secret.key` |
-| `paths.downloads` | `…/telegram-ai-cli/downloads` | Everything `media fetch` writes |
-| `paths.uploads` | `…/telegram-ai-cli/uploads` | The only directory a file may leave from — `message send-file` sends from it, `chat set-photo` publishes from it |
-| `paths.audit_log` | `…/telegram-ai-cli/audit.jsonl` | The append-only audit log |
-| `paths.archive` | `…/telegram-ai-cli/archive.sqlite3` | The local message archive — only what `archive sync` was told to copy |
+| `paths.sessions` | `$XDG_STATE_HOME/telegram-ai-cli-mcp/sessions` (else `~/.local/state/…`) | `.session` files, device fingerprints, session locks |
+| `paths.state` | `$XDG_STATE_HOME/telegram-ai-cli-mcp` | `state.db` (accounts, plans, rate limits) and `secret.key` |
+| `paths.downloads` | `…/telegram-ai-cli-mcp/downloads` | Everything `media fetch` writes |
+| `paths.uploads` | `…/telegram-ai-cli-mcp/uploads` | The only directory a file may leave from — `message send-file` sends from it, `chat set-photo` publishes from it |
+| `paths.audit_log` | `…/telegram-ai-cli-mcp/audit.jsonl` | The append-only audit log |
+| `paths.archive` | `…/telegram-ai-cli-mcp/archive.sqlite3` | The local message archive — only what `archive sync` was told to copy |
 
 Directories are created `0700` and account material `0600`. A failed `chmod` is
 fatal rather than logged and ignored: a warning would leave the file readable
@@ -469,7 +469,7 @@ Containment is decided on canonical paths — `realpath` first, comparison after
 so a symlink out of a root and a `..` in the middle of a path are both refused,
 and `/srv/data-evil` is not inside `/srv/data`. It is the same check
 `message send-file` applies to the outbox, shared rather than written twice
-([`roots.py`](../telegram_ai_cli/roots.py)).
+([`roots.py`](../telegram_ai_cli_mcp/roots.py)).
 
 The check runs before the account is opened, and it is a check on a path, not a
 lock on a directory: someone who can already replace `paths.downloads` with a
@@ -487,7 +487,7 @@ extra tool that refuses with an explanation.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `transcribe.image` | `telegram-ai-cli-transcribe:latest` | The optional image to run |
+| `transcribe.image` | `telegram-ai-cli-mcp-transcribe:latest` | The optional image to run |
 | `transcribe.model_cache` | `<state>/whisper-models` | Where the model weights live, mounted into the container read-only |
 | `transcribe.max_audio_seconds` | `600` (10 min) | Longest audio accepted, checked twice |
 | `transcribe.timeout_seconds` | `900` (15 min) | Wall clock for the whole container |

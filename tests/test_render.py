@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from telegram_ai_cli.render import quote_for_review, sanitize, sanitize_line
+from telegram_ai_cli_mcp.render import quote_for_review, sanitize, sanitize_line
 
 ESC = "\x1b"
 

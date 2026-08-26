@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import pytest
 
-from telegram_ai_cli.errors import ErrorCode, InvalidInput
-from telegram_ai_cli.links import parse_telegram_link
-from telegram_ai_cli.ops.chats import guard_message_link, message_id_from
-from telegram_ai_cli.safety import PeerKind, PeerRef
+from telegram_ai_cli_mcp.errors import ErrorCode, InvalidInput
+from telegram_ai_cli_mcp.links import parse_telegram_link
+from telegram_ai_cli_mcp.ops.chats import guard_message_link, message_id_from
+from telegram_ai_cli_mcp.safety import PeerKind, PeerRef
 
 GROUP = PeerRef(peer_id=-1001234567890, kind=PeerKind.GROUP, username=None, title="Marketing")
 CHANNEL = PeerRef(peer_id=-1001234567890, kind=PeerKind.CHANNEL, username="publicchat")

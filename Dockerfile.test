@@ -24,7 +24,7 @@ ENV PIP_NO_CACHE_DIR=1 \
 WORKDIR /app
 
 COPY pyproject.toml constraints.txt ./
-COPY telegram_ai_cli/ ./telegram_ai_cli/
+COPY telegram_ai_cli_mcp/ ./telegram_ai_cli_mcp/
 
 # Editable install: site-packages holds an import pointer back to /app rather
 # than a frozen copy, so a bind-mounted /app (fresh source, plus tests/ which

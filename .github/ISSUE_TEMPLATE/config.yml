@@ -3,5 +3,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/stufently/telegram-ai-cli/security/advisories/new
+    url: https://github.com/stufently/telegram-ai-cli-mcp/security/advisories/new
     about: Do not open a public issue for security reports — use GitHub Security Advisories (see SECURITY.md).

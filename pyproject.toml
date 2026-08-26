@@ -3,7 +3,7 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "telegram-ai-cli"
+name = "telegram-ai-cli-mcp"
 version = "0.1.0.dev0"
 description = "AI-first CLI and MCP server for Telegram user accounts over MTProto, with plan-and-apply approval, chat allowlists and an audit log for every outgoing message."
 readme = "README.md"
@@ -75,18 +75,18 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/stufently/telegram-ai-cli"
-Repository = "https://github.com/stufently/telegram-ai-cli"
-Documentation = "https://github.com/stufently/telegram-ai-cli/blob/main/docs/operations.md"
-Issues = "https://github.com/stufently/telegram-ai-cli/issues"
-Changelog = "https://github.com/stufently/telegram-ai-cli/blob/main/CHANGELOG.md"
-Security = "https://github.com/stufently/telegram-ai-cli/blob/main/SECURITY.md"
+Homepage = "https://github.com/stufently/telegram-ai-cli-mcp"
+Repository = "https://github.com/stufently/telegram-ai-cli-mcp"
+Documentation = "https://github.com/stufently/telegram-ai-cli-mcp/blob/main/docs/operations.md"
+Issues = "https://github.com/stufently/telegram-ai-cli-mcp/issues"
+Changelog = "https://github.com/stufently/telegram-ai-cli-mcp/blob/main/CHANGELOG.md"
+Security = "https://github.com/stufently/telegram-ai-cli-mcp/blob/main/SECURITY.md"
 
 [project.scripts]
-tg-ai = "telegram_ai_cli.cli:main"
+tg-ai = "telegram_ai_cli_mcp.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["telegram_ai_cli*"]
+include = ["telegram_ai_cli_mcp*"]
 
 # `Typing :: Typed` above is a promise to a downstream type checker, and PEP 561
 # says the promise is kept by a `py.typed` marker inside the installed package —
@@ -94,7 +94,7 @@ include = ["telegram_ai_cli*"]
 # simply untrue. Listed explicitly rather than left to `include-package-data`,
 # which reads a MANIFEST this project does not have.
 [tool.setuptools.package-data]
-telegram_ai_cli = ["py.typed"]
+telegram_ai_cli_mcp = ["py.typed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -103,7 +103,7 @@ testpaths = ["tests"]
 # `tests/` on the path anyway; saying so keeps that working under
 # `--import-mode=importlib`, where it does not.
 pythonpath = ["tests"]
-filterwarnings = ["error::DeprecationWarning:telegram_ai_cli.*"]
+filterwarnings = ["error::DeprecationWarning:telegram_ai_cli_mcp.*"]
 
 [tool.ruff]
 line-length = 100

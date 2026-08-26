@@ -31,11 +31,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import InvalidInput
-from telegram_ai_cli.ops.watch import (
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import InvalidInput
+from telegram_ai_cli_mcp.ops.watch import (
     MAX_DEBOUNCE_SECONDS,
     MAX_WATCH_SECONDS,
     WatchInput,
@@ -44,8 +44,8 @@ from telegram_ai_cli.ops.watch import (
     filtering_source,
     handle_watch,
 )
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.safety import Capability, PeerKind, PeerRef, SafetyKernel
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.safety import Capability, PeerKind, PeerRef, SafetyKernel
 
 # Deliberately small, obviously fake ids — see tests/test_no_private_data.py.
 GROUP = PeerRef(peer_id=-4242, kind=PeerKind.GROUP, title="A group")
@@ -470,7 +470,7 @@ async def test_the_ceiling_covers_the_setup_not_only_the_waiting(tmp_path, monke
     class FakeTime:
         monotonic = staticmethod(clock)
 
-    monkeypatch.setattr("telegram_ai_cli.ops.watch.time", FakeTime)
+    monkeypatch.setattr("telegram_ai_cli_mcp.ops.watch.time", FakeTime)
 
     group = telegram_group(4242)
     arrived = FakeEvent(chat=group, message=FakeMessage(id=9, message="too late"))

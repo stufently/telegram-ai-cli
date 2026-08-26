@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import AuditConfig
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import AuditConfig
 
 BODY = "hello, this is the message body"
 

@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from telegram_ai_cli.config import SecretsConfig
-from telegram_ai_cli.errors import ErrorCode, InsecurePermissions, TelegramAIError
-from telegram_ai_cli.secretbox import PREFIX, SecretBox, is_encrypted, load_key
+from telegram_ai_cli_mcp.config import SecretsConfig
+from telegram_ai_cli_mcp.errors import ErrorCode, InsecurePermissions, TelegramAIError
+from telegram_ai_cli_mcp.secretbox import PREFIX, SecretBox, is_encrypted, load_key
 
 SAMPLE_VALUE = "an api_hash nobody else should read"
 

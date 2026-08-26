@@ -18,9 +18,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.ops._common import telegram_result
-from telegram_ai_cli.untrusted import (
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.ops._common import telegram_result
+from telegram_ai_cli_mcp.untrusted import (
     CLOSE_MARKER,
     OPEN_MARKER,
     UNTRUSTED_FIELDS,

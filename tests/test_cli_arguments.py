@@ -24,11 +24,11 @@ from click.testing import CliRunner
 from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-from telegram_ai_cli import cli as cli_module
-from telegram_ai_cli.envelope import Envelope
-from telegram_ai_cli.ops.write import resolve_peer
-from telegram_ai_cli.opspec import REGISTRY
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+from telegram_ai_cli_mcp import cli as cli_module
+from telegram_ai_cli_mcp.envelope import Envelope
+from telegram_ai_cli_mcp.ops.write import resolve_peer
+from telegram_ai_cli_mcp.opspec import REGISTRY
 
 
 @pytest.fixture
@@ -341,7 +341,7 @@ def test_no_option_default_is_a_pydantic_sentinel() -> None:
 def test_annotated_integer_fields_are_typed_as_integers() -> None:
     """`Annotated[int, Field(le=...)]` is how a bounded id is spelled here, and
     the unwrap that used to miss it turned every one of them into text."""
-    from telegram_ai_cli.ops.write import MessageId
+    from telegram_ai_cli_mcp.ops.write import MessageId
 
     assert cli_module._click_type(MessageId) is int
     assert cli_module._click_type(get_args(list[MessageId])[0]) is int

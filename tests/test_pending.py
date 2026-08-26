@@ -8,7 +8,7 @@ dialog listing, and a listing that quietly included Saved Messages would defeat
 both.
 
 Everything here runs without Telethon: the payload builders take plain objects
-and a resolved :class:`~telegram_ai_cli.safety.PeerRef`, which is the same
+and a resolved :class:`~telegram_ai_cli_mcp.safety.PeerRef`, which is the same
 choice ``_serialize.message_summary`` makes and for the same reason.
 """
 
@@ -20,8 +20,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.ops.pending import (
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.ops.pending import (
     DRAFTS,
     SCHEDULED,
     WHEN_ONLINE,
@@ -30,9 +30,9 @@ from telegram_ai_cli.ops.pending import (
     draft_visibility,
     scheduled_summary,
 )
-from telegram_ai_cli.opspec import Effect
-from telegram_ai_cli.safety import Capability, PeerKind, PeerRef, SafetyKernel
-from telegram_ai_cli.untrusted import OPEN_MARKER, wrap_untrusted
+from telegram_ai_cli_mcp.opspec import Effect
+from telegram_ai_cli_mcp.safety import Capability, PeerKind, PeerRef, SafetyKernel
+from telegram_ai_cli_mcp.untrusted import OPEN_MARKER, wrap_untrusted
 
 GROUP = PeerRef(peer_id=-1001234567890, kind=PeerKind.GROUP, title="Team")
 USER = PeerRef(peer_id=4242, kind=PeerKind.USER, username="someone", title="Someone")

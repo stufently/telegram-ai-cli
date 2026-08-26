@@ -1,7 +1,7 @@
 """The whole of the optional transcription image: one file, two subcommands.
 
 This runs *inside* ``Dockerfile.transcribe`` and is not part of the installed
-package — that is the point of the split. ``telegram_ai_cli`` never imports
+package — that is the point of the split. ``telegram_ai_cli_mcp`` never imports
 faster-whisper, never grows a model dependency, and an installation that does
 not build this image is not carrying any of it.
 
@@ -34,7 +34,7 @@ import sys
 #: making this configurable would grow a model manager.
 MODEL_SIZE = "small"
 
-#: Kept in step with telegram_ai_cli/transcribe.py.
+#: Kept in step with telegram_ai_cli_mcp/transcribe.py.
 EXIT_FAILED = 1
 EXIT_MODEL_MISSING = 3
 EXIT_AUDIO_TOO_LONG = 4

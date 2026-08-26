@@ -36,18 +36,18 @@ from typing import Any
 import pytest
 from telethon.tl import types as tl
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import _LIMIT_KINDS, _reaction_object, _verify_mark
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import AuditConfig, PlansConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import _LIMIT_KINDS, _reaction_object, _verify_mark
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import AuditConfig, PlansConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     InvalidInput,
     NotAllowlisted,
     PlanPreconditionFailed,
     ProfileForbidden,
 )
-from telegram_ai_cli.ops.marks import (
+from telegram_ai_cli_mcp.ops.marks import (
     PinMessageInput,
     ReactMessageInput,
     UnpinMessageInput,
@@ -63,9 +63,9 @@ from telegram_ai_cli.ops.marks import (
     requested_reaction,
     same_reactions,
 )
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import SafetyKernel
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import SafetyKernel
 
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 

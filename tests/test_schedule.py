@@ -25,20 +25,20 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import _LIMIT_KINDS
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import PeerRule, PlansConfig, SafetyConfig, Settings, WritePolicy
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import _LIMIT_KINDS
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import PeerRule, PlansConfig, SafetyConfig, Settings, WritePolicy
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     ErrorCode,
     InvalidInput,
     NotAllowlisted,
     PlanPreconditionFailed,
     ProfileForbidden,
 )
-from telegram_ai_cli.ops.pending import WHEN_ONLINE
-from telegram_ai_cli.ops.schedule import (
+from telegram_ai_cli_mcp.ops.pending import WHEN_ONLINE
+from telegram_ai_cli_mcp.ops.schedule import (
     MAX_SCHEDULE_AHEAD,
     MIN_SCHEDULE_LEAD,
     SCHEDULE_MESSAGE,
@@ -48,10 +48,10 @@ from telegram_ai_cli.ops.schedule import (
     require_a_reachable_time,
     schedule_date,
 )
-from telegram_ai_cli.ops.write import text_digest
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import Capability, SafetyKernel
+from telegram_ai_cli_mcp.ops.write import text_digest
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import Capability, SafetyKernel
 
 # Deliberately small, obviously fake ids — see tests/test_no_private_data.py.
 CHANNEL_BASE = -(10**12)
@@ -534,16 +534,16 @@ class RecordingClient(FakeClient):
 
 
 def prepared_for(peer_id: int) -> Any:
-    from telegram_ai_cli.apply import _Prepared
-    from telegram_ai_cli.ops.write import Resolved
-    from telegram_ai_cli.safety import PeerKind, PeerRef
+    from telegram_ai_cli_mcp.apply import _Prepared
+    from telegram_ai_cli_mcp.ops.write import Resolved
+    from telegram_ai_cli_mcp.safety import PeerKind, PeerRef
 
     resolved = Resolved(ref=PeerRef(peer_id=peer_id, kind=PeerKind.GROUP, title="Marketing"))
     return _Prepared(limit_target=str(peer_id), peers={"chat": resolved})
 
 
 def plan_for(params: ScheduleMessageInput) -> Any:
-    from telegram_ai_cli.plans import Plan, PlanState
+    from telegram_ai_cli_mcp.plans import Plan, PlanState
 
     return Plan(
         plan_id="0" * 32,
@@ -561,7 +561,7 @@ def plan_for(params: ScheduleMessageInput) -> Any:
 @pytest.mark.asyncio
 async def test_the_send_carries_the_schedule_and_both_delivery_flags() -> None:
     """The one place the plan turns into a request; asserted on the call itself."""
-    from telegram_ai_cli.apply import _execute
+    from telegram_ai_cli_mcp.apply import _execute
 
     params = input_for(silent=True, link_preview=False)
     client = RecordingClient({})
@@ -589,7 +589,7 @@ async def test_when_online_warns_that_there_may_be_nothing_to_cancel() -> None:
     is the one mode that can skip it. Saying so at apply time is the difference
     between "check the chat" and "it is waiting, you can still cancel it".
     """
-    from telegram_ai_cli.apply import _execute
+    from telegram_ai_cli_mcp.apply import _execute
 
     params = input_for(at=None, when_online=True)
     client = RecordingClient({})
@@ -608,7 +608,7 @@ async def test_a_send_that_answers_without_an_id_is_reported_not_raised() -> Non
     Raising here would file a schedule that succeeded as an unknown outcome,
     and an unknown outcome is the state a person has to investigate by hand.
     """
-    from telegram_ai_cli.apply import _execute
+    from telegram_ai_cli_mcp.apply import _execute
 
     params = input_for()
     client = RecordingClient({}, message_id=None)

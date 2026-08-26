@@ -16,9 +16,9 @@ import os
 
 import pytest
 
-from telegram_ai_cli.config import HARD_DENIED_PEERS, Settings
-from telegram_ai_cli.errors import Denylisted, ErrorCode
-from telegram_ai_cli.safety import Capability, PeerKind, PeerRef, SafetyKernel
+from telegram_ai_cli_mcp.config import HARD_DENIED_PEERS, Settings
+from telegram_ai_cli_mcp.errors import Denylisted, ErrorCode
+from telegram_ai_cli_mcp.safety import Capability, PeerKind, PeerRef, SafetyKernel
 
 SERVICE_ID = 777000
 

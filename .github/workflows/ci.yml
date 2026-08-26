@@ -68,7 +68,7 @@ jobs:
           python-version: "3.14"
       - name: Install package
         run: python -m pip install -c constraints.txt .
-      # Deliberately NOT just `python -c "import telegram_ai_cli.mcp_server"`:
+      # Deliberately NOT just `python -c "import telegram_ai_cli_mcp.mcp_server"`:
       # an import proves the module parses, not that a client can actually
       # talk to the server. scripts/smoke_mcp.py launches `tg-ai mcp`, does
       # the real MCP initialize handshake, and asserts tools/list answers
@@ -83,10 +83,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build runtime image
-        run: docker build -f Dockerfile -t telegram-ai-cli:ci .
+        run: docker build -f Dockerfile -t telegram-ai-cli-mcp:ci .
       - name: Verify the container does not run as root
         run: |
-          uid="$(docker run --rm --entrypoint id telegram-ai-cli:ci -u)"
+          uid="$(docker run --rm --entrypoint id telegram-ai-cli-mcp:ci -u)"
           echo "container UID: $uid"
           if [ "$uid" = "0" ]; then
             echo "::error::container runtime user is root (UID 0)"
@@ -95,7 +95,7 @@ jobs:
       - name: Verify the entrypoint actually runs
         # No --entrypoint override needed: the image's own ENTRYPOINT is
         # ["tg-ai"] and its default CMD is ["--help"].
-        run: docker run --rm telegram-ai-cli:ci
+        run: docker run --rm telegram-ai-cli-mcp:ci
 
   transcribe-container:
     name: optional transcriber (build + contract)
@@ -103,15 +103,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the optional image
-        run: docker build -f Dockerfile.transcribe -t telegram-ai-cli-transcribe:ci .
+        run: docker build -f Dockerfile.transcribe -t telegram-ai-cli-mcp-transcribe:ci .
       - name: Verify non-root runtime
         run: |
-          uid="$(docker run --rm --entrypoint id telegram-ai-cli-transcribe:ci -u)"
+          uid="$(docker run --rm --entrypoint id telegram-ai-cli-mcp-transcribe:ci -u)"
           test "$uid" != "0"
       - name: Missing model uses the documented exit status
         run: |
           set +e
-          docker run --rm --network none telegram-ai-cli-transcribe:ci \
+          docker run --rm --network none telegram-ai-cli-mcp-transcribe:ci \
             transcribe --input /audio/absent.oga --max-seconds 1
           status="$?"
           set -e

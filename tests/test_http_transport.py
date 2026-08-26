@@ -19,9 +19,9 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import http_server
-from telegram_ai_cli.config import HTTPConfig
-from telegram_ai_cli.errors import ErrorCode, TelegramAIError
+from telegram_ai_cli_mcp import http_server
+from telegram_ai_cli_mcp.config import HTTPConfig
+from telegram_ai_cli_mcp.errors import ErrorCode, TelegramAIError
 
 TOKEN = "0123456789abcdef0123456789abcdef"  # noqa: S105 - a fixture, not a credential
 
@@ -168,7 +168,7 @@ def test_a_configured_token_is_read_from_the_environment(monkeypatch) -> None:
 
 
 def test_the_token_never_reaches_a_log_line(caplog) -> None:
-    with caplog.at_level(logging.INFO, logger="telegram_ai_cli.http_server"):
+    with caplog.at_level(logging.INFO, logger="telegram_ai_cli_mcp.http_server"):
         http_server.log_startup("127.0.0.1", 8765, "/mcp", TOKEN)
 
     text = "\n".join(record.getMessage() for record in caplog.records)

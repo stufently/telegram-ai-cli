@@ -21,9 +21,9 @@ from pathlib import Path
 
 import pytest
 
-from telegram_ai_cli.apply import _as_project_error, _no_effect_error_classes
-from telegram_ai_cli.errors import ErrorCode, ForwardsRestricted
-from telegram_ai_cli.opspec import REGISTRY
+from telegram_ai_cli_mcp.apply import _as_project_error, _no_effect_error_classes
+from telegram_ai_cli_mcp.errors import ErrorCode, ForwardsRestricted
+from telegram_ai_cli_mcp.opspec import REGISTRY
 
 REPO = Path(__file__).resolve().parent.parent
 CHANNEL_BASE = -(10**12)

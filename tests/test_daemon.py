@@ -24,14 +24,14 @@ from typing import Any
 
 import pytest
 
-import telegram_ai_cli.ops  # noqa: F401  (registers every operation)
-from telegram_ai_cli.accounts.lock import SessionLock
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.daemon import client as daemon_client
-from telegram_ai_cli.daemon import paths as daemon_paths
-from telegram_ai_cli.daemon import protocol, service
-from telegram_ai_cli.daemon.server import AccountDaemon
-from telegram_ai_cli.errors import (
+import telegram_ai_cli_mcp.ops  # noqa: F401  (registers every operation)
+from telegram_ai_cli_mcp.accounts.lock import SessionLock
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.daemon import client as daemon_client
+from telegram_ai_cli_mcp.daemon import paths as daemon_paths
+from telegram_ai_cli_mcp.daemon import protocol, service
+from telegram_ai_cli_mcp.daemon.server import AccountDaemon
+from telegram_ai_cli_mcp.errors import (
     ErrorCode,
     InsecurePermissions,
     InvalidInput,
@@ -208,7 +208,7 @@ def test_a_socket_path_too_long_for_an_address_is_refused_by_name(tmp_path: Path
 
 def test_a_normal_socket_path_is_comfortably_inside_the_limit(tmp_path: Path) -> None:
     settings = settings_for(tmp_path)
-    settings.paths.state = Path("/home/someone/.local/state/telegram-ai-cli")
+    settings.paths.state = Path("/home/someone/.local/state/telegram-ai-cli-mcp")
     path = daemon_paths.socket_path(settings, "work")
 
     assert len(str(path).encode()) <= daemon_paths.MAX_SOCKET_PATH_BYTES
@@ -488,7 +488,7 @@ def test_the_daemon_cannot_apply_a_plan() -> None:
 
 def test_account_administration_is_not_reachable_over_the_socket() -> None:
     """Signing an account in prompts a person; a socket cannot be prompted."""
-    from telegram_ai_cli.opspec import REGISTRY, Effect
+    from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
 
     admin = [op for op in REGISTRY.all() if op.effect is Effect.LOCAL_ADMIN]
     assert admin, "no LOCAL_ADMIN operation exists; this test has nothing to prove"
@@ -588,7 +588,7 @@ async def test_a_daemon_under_another_configuration_refuses_before_running(tmp_p
 
 
 def _read_op() -> Any:
-    from telegram_ai_cli.opspec import REGISTRY, Effect
+    from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
 
     return next(
         op
@@ -598,7 +598,7 @@ def _read_op() -> Any:
 
 
 def test_nothing_is_routed_while_the_daemon_is_disabled(tmp_path: Path) -> None:
-    from telegram_ai_cli import dispatch
+    from telegram_ai_cli_mcp import dispatch
 
     op = _read_op()
     settings = settings_for(tmp_path)
@@ -610,7 +610,7 @@ def test_nothing_is_routed_while_the_daemon_is_disabled(tmp_path: Path) -> None:
 
 def test_only_a_request_that_names_an_account_is_routed(tmp_path: Path) -> None:
     """A daemon serves one account; a fleet-wide call must not be narrowed."""
-    from telegram_ai_cli import dispatch
+    from telegram_ai_cli_mcp import dispatch
 
     op = _read_op()
     settings = settings_for(tmp_path)
@@ -626,8 +626,8 @@ def test_only_a_request_that_names_an_account_is_routed(tmp_path: Path) -> None:
 
 
 def test_account_administration_is_never_routed(tmp_path: Path) -> None:
-    from telegram_ai_cli import dispatch
-    from telegram_ai_cli.opspec import REGISTRY, Effect
+    from telegram_ai_cli_mcp import dispatch
+    from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
 
     settings = settings_for(tmp_path)
     settings.daemon.enabled = True
@@ -643,7 +643,7 @@ def test_account_administration_is_never_routed(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_an_envelope_survives_the_round_trip(tmp_path: Path) -> None:
     """What the daemon ran must print as what a local run would have printed."""
-    from telegram_ai_cli.envelope import Envelope, Meta
+    from telegram_ai_cli_mcp.envelope import Envelope, Meta
 
     original = Envelope.success(
         {"rows": [1, 2]},

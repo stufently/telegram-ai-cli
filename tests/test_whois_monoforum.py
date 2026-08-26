@@ -27,9 +27,9 @@ from telethon import utils
 from telethon.tl import types as tl
 from telethon.tl.functions.channels import GetFullChannelRequest
 
-from telegram_ai_cli.errors import FloodWait, SessionRevoked
-from telegram_ai_cli.ops.contacts import WhoisInput, handle_whois
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER, unwrap
+from telegram_ai_cli_mcp.errors import FloodWait, SessionRevoked
+from telegram_ai_cli_mcp.ops.contacts import WhoisInput, handle_whois
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER, unwrap
 
 CHANNEL_ID = 4242
 INBOX_ID = 4343

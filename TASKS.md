@@ -12,14 +12,14 @@ authority and cannot be completed by changing this checkout.
 
 - [ ] Register the PyPI pending trusted publisher at
       <https://pypi.org/manage/account/publishing/> with project
-      `telegram-ai-cli`, owner `stufently`, repository `telegram-ai-cli`,
+      `telegram-ai-cli-mcp`, owner `stufently`, repository `telegram-ai-cli-mcp`,
       workflow `release.yml`, environment `pypi`.
 - [ ] Create the GitHub environment `pypi`, preferably with a required reviewer.
 - [ ] Bump `project.version`, land it on `main`, and push the matching first
       `v*` tag. The release workflow rejects a tag/version mismatch.
 - [ ] Review and publish the draft GitHub release produced after PyPI succeeds.
 - [ ] After the first package exists, change the plugin launcher to an
-      install-free `uvx telegram-ai-cli …` form if that remains desirable.
+      install-free `uvx telegram-ai-cli-mcp …` form if that remains desirable.
 - [ ] Publish the server to the chosen MCP registry under the same package name.
 
 ## Repository owner

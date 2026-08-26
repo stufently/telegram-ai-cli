@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.config import PlansConfig
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.config import PlansConfig
+from telegram_ai_cli_mcp.errors import (
     ErrorCode,
     InvalidInput,
     LimitExceeded,
@@ -28,8 +28,8 @@ from telegram_ai_cli.errors import (
     PlanNotPending,
     TelegramAIError,
 )
-from telegram_ai_cli.plans import TERMINAL_STATES, Plan, PlanState, PlanStore
-from telegram_ai_cli.secretbox import PREFIX, SecretBox
+from telegram_ai_cli_mcp.plans import TERMINAL_STATES, Plan, PlanState, PlanStore
+from telegram_ai_cli_mcp.secretbox import PREFIX, SecretBox
 
 BODY = "the exact bytes a human is going to approve"
 

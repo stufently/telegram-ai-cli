@@ -16,11 +16,11 @@ import sys
 
 import pytest
 
-from telegram_ai_cli import cli as cli_module
-from telegram_ai_cli.cli import _emit
-from telegram_ai_cli.envelope import Envelope
-from telegram_ai_cli.errors import NotFound
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp import cli as cli_module
+from telegram_ai_cli_mcp.cli import _emit
+from telegram_ai_cli_mcp.envelope import Envelope
+from telegram_ai_cli_mcp.errors import NotFound
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 
 def test_an_escape_sequence_in_a_refusal_never_reaches_the_terminal(

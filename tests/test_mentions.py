@@ -33,12 +33,12 @@ from telethon.tl.functions.messages import (
     ReadReactionsRequest,
 )
 
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import AuditConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.ops.inbox import InboxInput, _rank, _waiting
-from telegram_ai_cli.ops.mentions import MentionsInput, handle_mentions
-from telegram_ai_cli.safety import SafetyKernel
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import AuditConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.ops.inbox import InboxInput, _rank, _waiting
+from telegram_ai_cli_mcp.ops.mentions import MentionsInput, handle_mentions
+from telegram_ai_cli_mcp.safety import SafetyKernel
 
 NOW = datetime(2026, 8, 23, 10, 0, tzinfo=UTC)
 
@@ -543,7 +543,7 @@ async def test_hiding_private_chats_does_not_report_how_many_are_active(
 
 async def test_stopping_at_the_dialog_ceiling_is_reported(tmp_path: Path) -> None:
     """A short list that looks complete is the failure mode worth a warning."""
-    from telegram_ai_cli.ops._common import MAX_DIALOG_SCAN
+    from telegram_ai_cli_mcp.ops._common import MAX_DIALOG_SCAN
 
     dialogs = [
         FakeDialog(entity=group(peer_id=1000 + n, title=f"g{n}")) for n in range(MAX_DIALOG_SCAN)
@@ -562,7 +562,7 @@ async def test_a_named_account_that_fails_is_an_error_not_an_empty_answer(
     tmp_path: Path,
 ) -> None:
     """ "No mentions" and "nobody looked" must not serialize identically."""
-    from telegram_ai_cli.errors import TelegramAIError
+    from telegram_ai_cli_mcp.errors import TelegramAIError
 
     ctx = build_ctx(tmp_path, FakeClient([]))
 
@@ -590,7 +590,7 @@ async def test_the_totals_count_the_chats_past_the_cut_too(tmp_path: Path) -> No
 
 def test_a_dialog_row_carries_the_unread_reaction_count() -> None:
     """The count the ranking reads has to be on the row in the first place."""
-    from telegram_ai_cli.ops._serialize import dialog_summary
+    from telegram_ai_cli_mcp.ops._serialize import dialog_summary
 
     dialog = FakeDialog(entity=group(), unread_mentions_count=1, unread_reactions_count=2)
 

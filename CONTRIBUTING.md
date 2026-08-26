@@ -25,7 +25,7 @@ the same result on every machine, including CI.
 1. `make lint` and `make test` both pass.
 2. New behaviour has a test. This project's safety guarantees — the hard
    denylist, fail-closed allow lists, the plan/apply split, persistent limits —
-   are each backed by a specific test file (see `docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`
+   are each backed by a specific test file (see `docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md`
    §10 for the list); a change that touches one of those areas without a
    matching test change will be asked to add one.
 3. `CHANGELOG.md` has an entry under `[Unreleased]`, written as a sentence that
@@ -46,7 +46,7 @@ accepted; see [SECURITY.md](SECURITY.md) for what's considered in scope as a
 vulnerability versus a design trade-off.
 
 If you've found an actual vulnerability rather than a feature idea, please
-report it through [GitHub Security Advisories](https://github.com/stufently/telegram-ai-cli/security/advisories/new)
+report it through [GitHub Security Advisories](https://github.com/stufently/telegram-ai-cli-mcp/security/advisories/new)
 instead of a pull request or a public issue — see [SECURITY.md](SECURITY.md).
 
 ## Code style
@@ -62,7 +62,7 @@ instead of a pull request or a public issue — see [SECURITY.md](SECURITY.md).
 
 ## Project structure
 
-See the architecture section of [`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`](docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md)
+See the architecture section of [`docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md`](docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md)
 for how `opspec.py`, `ops/`, `cli.py` and `mcp_server.py` fit together — in
 short, the CLI and the MCP server are both thin adapters over the same
 operation registry, and a change to one surface without checking the other is

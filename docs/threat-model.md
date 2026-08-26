@@ -12,7 +12,7 @@ account owner's contacts.** A message body, a chat title, a group description,
 a display name, a bio — every one of them is a string an attacker can shape
 freely, simply by sending it. This project treats every such string as data,
 never as an instruction, and marks it as such in the JSON contract
-(`meta.untrusted_content`, see [`envelope.py`](../telegram_ai_cli/envelope.py)).
+(`meta.untrusted_content`, see [`envelope.py`](../telegram_ai_cli_mcp/envelope.py)).
 Every place that reasoning could plausibly fail is called out below by name.
 
 The rest of this document assumes the reader has read the README's
@@ -40,7 +40,7 @@ handled.
    never fetched in the first place.
 5. **The plan database and audit log.** Lower stakes than the above, but a
    plan can contain an unsent message body (encrypted at rest, see
-   [`secretbox.py`](../telegram_ai_cli/secretbox.py)), and the audit log is the
+   [`secretbox.py`](../telegram_ai_cli_mcp/secretbox.py)), and the audit log is the
    record everything else in this document leans on for detectability.
 
 ## Actors
@@ -73,7 +73,7 @@ handled.
   document spends the most words on, because it is the one existing controls
   do the least against.
 - **A co-resident process running as the same OS user.** Can read
-  `~/.config/telegram-ai-cli/`, `~/.local/state/telegram-ai-cli/`, and any
+  `~/.config/telegram-ai-cli-mcp/`, `~/.local/state/telegram-ai-cli-mcp/`, and any
   environment variable the `tg-ai` process was started with — including
   `TGAI_SECRET_KEY` if it was passed that way rather than through a key file.
 - **A network attacker between this tool and Telegram**, or a Telegram-side
@@ -84,12 +84,12 @@ handled.
 
 ### T1 — An agent (steered by injected content, or just wrong) tries to act on a chat outside its remit
 
-**Mitigated.** The capability matrix in [`safety.py`](../telegram_ai_cli/safety.py)
+**Mitigated.** The capability matrix in [`safety.py`](../telegram_ai_cli_mcp/safety.py)
 is checked for every read and every plan creation, before anything reaches
 Telegram. Direct messages are closed until explicitly allowlisted; every write
 capability is fail-closed the same way. `777000` and Saved Messages are
 excluded as constants, ahead of any allow/deny list — see
-[`config.py`](../telegram_ai_cli/config.py). None of this can be reconfigured
+[`config.py`](../telegram_ai_cli_mcp/config.py). None of this can be reconfigured
 away by anything arriving through a tool call, because the check runs against
 the loaded `Settings` object, not against text in the request.
 
@@ -97,8 +97,8 @@ the loaded `Settings` object, not against text in the request.
 
 **Partially mitigated — the error exists, the check that raises it doesn't yet.**
 Policy and targets are meant to be resolved to a numeric peer id at plan time
-and stored in `Plan.preconditions` ([`plans.py`](../telegram_ai_cli/plans.py));
-`PlanPreconditionFailed` in [`errors.py`](../telegram_ai_cli/errors.py) exists
+and stored in `Plan.preconditions` ([`plans.py`](../telegram_ai_cli_mcp/plans.py));
+`PlanPreconditionFailed` in [`errors.py`](../telegram_ai_cli_mcp/errors.py) exists
 precisely for "the world moved between planning and applying," and
 `plan show` already surfaces `preconditions` to a reviewer. What's missing is
 the module that actually re-verifies the id against Telegram before calling
@@ -107,27 +107,27 @@ imports but which doesn't exist yet. Tracked in [`TASKS.md`](../TASKS.md).
 
 ### T3 — A plan gets applied twice, or two concurrent applies race
 
-**Mitigated.** `PlanStore.claim()` in [`plans.py`](../telegram_ai_cli/plans.py)
+**Mitigated.** `PlanStore.claim()` in [`plans.py`](../telegram_ai_cli_mcp/plans.py)
 implements the `pending → applying` transition as a conditional `UPDATE`
 inside a `BEGIN IMMEDIATE` transaction (see
-[`db.immediate()`](../telegram_ai_cli/db.py)), the same pattern already used
-for rate-limit reservations in [`limits.py`](../telegram_ai_cli/limits.py).
+[`db.immediate()`](../telegram_ai_cli_mcp/db.py)), the same pattern already used
+for rate-limit reservations in [`limits.py`](../telegram_ai_cli_mcp/limits.py).
 Two processes racing to claim the same `plan_id` cannot both win — only the
 caller whose `UPDATE` actually changed a row proceeds.
 
 ### T4 — A timeout after the RPC left causes a retry, sending a message twice
 
-**Mitigated.** `PlanUnknownOutcome` in [`errors.py`](../telegram_ai_cli/errors.py)
+**Mitigated.** `PlanUnknownOutcome` in [`errors.py`](../telegram_ai_cli_mcp/errors.py)
 is deliberately not retryable, and Telethon's own automatic flood-wait retry
 is disabled (`telethon_flood_sleep_threshold: int = 0` in
-[`config.py`](../telegram_ai_cli/config.py)) so nothing beneath this project
+[`config.py`](../telegram_ai_cli_mcp/config.py)) so nothing beneath this project
 resends on its own either. An `unknown_outcome` plan is left for a human to
 resolve by hand.
 
 ### T5 — A rate limit gets reset by restarting the process
 
 **Mitigated.** Limits are counted from rows in SQLite
-([`limits.py`](../telegram_ai_cli/limits.py)), not from an in-memory counter,
+([`limits.py`](../telegram_ai_cli_mcp/limits.py)), not from an in-memory counter,
 and a slot is reserved *before* the network call under the same
 `BEGIN IMMEDIATE` pattern, so a burst of concurrent callers can't all read the
 same pre-increment count and all proceed.
@@ -135,7 +135,7 @@ same pre-increment count and all proceed.
 ### T6 — A malicious chat title, message body or plan summary manipulates what a human sees when reviewing a plan
 
 **Mitigated.** Everything Telegram-authored is passed through
-[`render.py`](../telegram_ai_cli/render.py) before it reaches a terminal — ANSI
+[`render.py`](../telegram_ai_cli_mcp/render.py) before it reaches a terminal — ANSI
 and OSC escape sequences, carriage returns, control characters and
 bidirectional-override characters are all stripped. This is the control the
 entire human-approval story depends on: if a chat title could redraw the
@@ -145,7 +145,7 @@ unfiltered text, and is never exposed to an MCP client.
 
 ### T7 — Sensitive values leak through logs, errors, or tool output
 
-**Partially mitigated.** [`redact.py`](../telegram_ai_cli/redact.py) masks
+**Partially mitigated.** [`redact.py`](../telegram_ai_cli_mcp/redact.py) masks
 values recognizable by shape (phone numbers, card numbers, seed phrases, TON
 and EVM addresses, login codes, API-token-shaped strings) in any structure
 before it leaves the process. This is explicitly a second line of defence —
@@ -159,7 +159,7 @@ first place; redaction only limits the damage of what does.
 **Mitigated for the database; not for the `.session` file itself.**
 `api_hash`, proxy credentials and plan bodies are AES-256-GCM encrypted with a
 key held outside the database
-([`secretbox.py`](../telegram_ai_cli/secretbox.py)) — a leaked database or
+([`secretbox.py`](../telegram_ai_cli_mcp/secretbox.py)) — a leaked database or
 backup is useless without the key. The Telethon `.session` file, however,
 *is* the auth key, in the clear, by the nature of MTProto session storage;
 `0600` permissions protect it from other users on the same host, not from a

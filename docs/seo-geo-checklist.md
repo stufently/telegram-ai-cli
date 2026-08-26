@@ -7,7 +7,7 @@ for the first public release; the authoritative hand-off list is
 [`TASKS.md`](../TASKS.md).
 
 Rationale for why this matters at all: the design brief for this project
-(`docs/superpowers/specs/2026-08-23-telegram-ai-cli-design.md`, §7) treats
+(`docs/superpowers/specs/2026-08-23-telegram-ai-cli-mcp-design.md`, §7) treats
 findability by AI answer engines (GEO — generative engine optimization) as at
 least as important as classic search ranking, on the premise that someone
 looking for "an MCP server for Telegram" is more likely to ask an LLM than to

@@ -12,13 +12,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from telegram_ai_cli.ops._serialize import (
+from telegram_ai_cli_mcp.ops._serialize import (
     ReadPointers,
     message_summary,
     peer_summary,
     reactions_summary,
 )
-from telegram_ai_cli.safety import PeerKind, PeerRef
+from telegram_ai_cli_mcp.safety import PeerKind, PeerRef
 
 GROUP = PeerRef(peer_id=-1001234567890, kind=PeerKind.GROUP, username=None, title="Marketing")
 PUBLIC = PeerRef(peer_id=-1001234567890, kind=PeerKind.CHANNEL, username="publicchat", title="News")
@@ -100,7 +100,7 @@ def test_a_channel_surfaces_its_linked_direct_messages_chat_as_a_usable_id() -> 
 
 
 def test_media_without_an_id_is_fingerprinted_by_its_content() -> None:
-    from telegram_ai_cli.ops._serialize import media_fingerprint
+    from telegram_ai_cli_mcp.ops._serialize import media_fingerprint
 
     @dataclass
     class Location:

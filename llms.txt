@@ -1,4 +1,4 @@
-# telegram-ai-cli
+# telegram-ai-cli-mcp
 
 > A CLI and MCP (Model Context Protocol) server, built from one Python codebase,
 > that lets an AI agent — Claude, Codex, or any MCP client — read and act on a
@@ -14,7 +14,7 @@
 
 ## Key facts
 
-- Package/command: `telegram-ai-cli` (the intended PyPI name; nothing is
+- Package/command: `telegram-ai-cli-mcp` (the intended PyPI name; nothing is
   claimed there yet and nothing is published), CLI binary `tg-ai`.
 - License: MIT.
 - Language: Python, requires 3.12+.
@@ -39,30 +39,30 @@
 
 ## Primary sources
 
-- [README](https://github.com/stufently/telegram-ai-cli/blob/main/README.md):
+- [README](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/README.md):
   what it does, install and configure, how to add it to Claude Code, Claude
   Desktop, Codex or Cursor, the MCP tool list, the JSON contract, and an FAQ
   written against real questions people ask about Telegram automation and MCP.
-- [SECURITY.md](https://github.com/stufently/telegram-ai-cli/blob/main/SECURITY.md):
+- [SECURITY.md](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/SECURITY.md):
   vulnerability reporting (GitHub Security Advisories, not email), scope, and
   the design rationale behind each safety control.
-- [docs/operations.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/operations.md):
+- [docs/operations.md](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/docs/operations.md):
   every operation on both surfaces — the read tools, the plan tools (which
   now include reactions and pins), the plan lifecycle commands and the three
   terminal-only account commands (`add`, `login`, `login-qr`) — with
   arguments, defaults and the policy each one consults, plus
   the shared message shape and the trust boundary in tool output.
-- [docs/configuration.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/configuration.md):
+- [docs/configuration.md](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/docs/configuration.md):
   the full `tgai.yaml` reference and its `TGAI_`-prefixed environment
   equivalents, including what cannot be configured at all (`777000` and Saved
   Messages are constants in code, not defaults).
-- [docs/threat-model.md](https://github.com/stufently/telegram-ai-cli/blob/main/docs/threat-model.md):
+- [docs/threat-model.md](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/docs/threat-model.md):
   the full threat model, including the honest limit of the plan/apply
   approval boundary and the path to a stronger one (a separate OS principal,
   or a TOTP-gated apply) that v0.1 does not implement.
-- [CHANGELOG.md](https://github.com/stufently/telegram-ai-cli/blob/main/CHANGELOG.md):
+- [CHANGELOG.md](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/CHANGELOG.md):
   what has actually shipped, in Keep a Changelog format.
-- [CITATION.cff](https://github.com/stufently/telegram-ai-cli/blob/main/CITATION.cff):
+- [CITATION.cff](https://github.com/stufently/telegram-ai-cli-mcp/blob/main/CITATION.cff):
   how to cite this project.
 
 ## Related projects, same author (GitHub: stufently)

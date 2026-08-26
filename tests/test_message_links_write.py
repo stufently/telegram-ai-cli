@@ -29,13 +29,13 @@ import pytest
 from pydantic import ValidationError
 from telethon.tl import types as tl
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import _verify
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import AuditConfig, PlansConfig, Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import InvalidInput, PlanPreconditionFailed
-from telegram_ai_cli.ops.write import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import _verify
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import AuditConfig, PlansConfig, Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import InvalidInput, PlanPreconditionFailed
+from telegram_ai_cli_mcp.ops.write import (
     DeleteMessageInput,
     EditMessageInput,
     ForwardMessageInput,
@@ -45,9 +45,9 @@ from telegram_ai_cli.ops.write import (
     plan_forward_message,
     plan_reply_message,
 )
-from telegram_ai_cli.opspec import REGISTRY
-from telegram_ai_cli.plans import PlanStore
-from telegram_ai_cli.safety import SafetyKernel
+from telegram_ai_cli_mcp.opspec import REGISTRY
+from telegram_ai_cli_mcp.plans import PlanStore
+from telegram_ai_cli_mcp.safety import SafetyKernel
 
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 

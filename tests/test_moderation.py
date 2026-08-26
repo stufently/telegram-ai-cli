@@ -34,20 +34,20 @@ from typing import Any
 
 import pytest
 
-from telegram_ai_cli import db
-from telegram_ai_cli.apply import _LIMIT_KINDS, _execute, _verify
-from telegram_ai_cli.audit import AuditLog
-from telegram_ai_cli.config import Settings
-from telegram_ai_cli.context import OperationContext
-from telegram_ai_cli.errors import (
+from telegram_ai_cli_mcp import db
+from telegram_ai_cli_mcp.apply import _LIMIT_KINDS, _execute, _verify
+from telegram_ai_cli_mcp.audit import AuditLog
+from telegram_ai_cli_mcp.config import Settings
+from telegram_ai_cli_mcp.context import OperationContext
+from telegram_ai_cli_mcp.errors import (
     InvalidInput,
     NotAllowlisted,
     PlanPreconditionFailed,
     ProfileForbidden,
 )
-from telegram_ai_cli.limits import LimitKind, LimitStore
-from telegram_ai_cli.ops import write
-from telegram_ai_cli.ops.write import (
+from telegram_ai_cli_mcp.limits import LimitKind, LimitStore
+from telegram_ai_cli_mcp.ops import write
+from telegram_ai_cli_mcp.ops.write import (
     BAN_USER,
     DEMOTE_ADMIN,
     KICK_USER,
@@ -60,11 +60,11 @@ from telegram_ai_cli.ops.write import (
     RestrictUserInput,
     UnbanUserInput,
 )
-from telegram_ai_cli.opspec import REGISTRY, Effect
-from telegram_ai_cli.plans import PlanState, PlanStore
-from telegram_ai_cli.safety import Capability, SafetyKernel
-from telegram_ai_cli.secretbox import SecretBox
-from telegram_ai_cli.untrusted import CLOSE_MARKER, OPEN_MARKER
+from telegram_ai_cli_mcp.opspec import REGISTRY, Effect
+from telegram_ai_cli_mcp.plans import PlanState, PlanStore
+from telegram_ai_cli_mcp.safety import Capability, SafetyKernel
+from telegram_ai_cli_mcp.secretbox import SecretBox
+from telegram_ai_cli_mcp.untrusted import CLOSE_MARKER, OPEN_MARKER
 
 # Obviously fake ids, written the way tests/test_no_private_data.py wants them.
 CHANNEL_BASE = -(10**12)
@@ -437,7 +437,7 @@ async def test_a_kick_that_bans_and_cannot_lift_it_reports_a_ban_not_a_kick() ->
     taxonomy would otherwise get backwards: a flood wait on the second call is
     a "no effect" error, which would refund the budget and close the plan as
     failed while the person stayed banned."""
-    from telegram_ai_cli.errors import PlanUnknownOutcome
+    from telegram_ai_cli_mcp.errors import PlanUnknownOutcome
 
     class HalfKick(FakeClient):
         async def __call__(self, request: Any) -> Any:
@@ -514,9 +514,9 @@ async def test_applying_a_restriction_whose_duration_moved_is_refused(
 
 
 def prepared_for(client: FakeClient):
-    from telegram_ai_cli.apply import _Prepared
-    from telegram_ai_cli.ops.write import Resolved
-    from telegram_ai_cli.safety import PeerKind, PeerRef
+    from telegram_ai_cli_mcp.apply import _Prepared
+    from telegram_ai_cli_mcp.ops.write import Resolved
+    from telegram_ai_cli_mcp.safety import PeerKind, PeerRef
 
     chat = Resolved(ref=PeerRef(peer_id=client.chat_id, kind=PeerKind.GROUP, title="Marketing"))
     user = Resolved(ref=PeerRef(peer_id=MEMBER_ID, kind=PeerKind.USER, username="someone"))
@@ -648,9 +648,9 @@ def test_the_basic_group_refusal_names_the_chat_by_id() -> None:
     is neither — the sentence around it is this project's own words — so the
     refusal quotes the id instead of borrowing anybody's.
     """
-    from telegram_ai_cli.envelope import Envelope
-    from telegram_ai_cli.ops.write import Resolved, _require_ban_list
-    from telegram_ai_cli.safety import PeerKind, PeerRef
+    from telegram_ai_cli_mcp.envelope import Envelope
+    from telegram_ai_cli_mcp.ops.write import Resolved, _require_ban_list
+    from telegram_ai_cli_mcp.safety import PeerKind, PeerRef
 
     chat = Resolved(
         ref=PeerRef(
