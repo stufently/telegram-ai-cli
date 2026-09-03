@@ -1841,3 +1841,48 @@ the same operations, the same policy, and still no tool that applies a plan.
 Authenticated arrivals are additionally bounded by
 `http.requests_per_minute`, and request bodies larger than
 `http.max_request_body_bytes` are rejected before the MCP SDK parses them.
+
+## Deployment on a shared host
+
+`tg-ai` declares a current dependency floor — `mcp>=2.0,<3`, `telethon>=1.44,<2`,
+`opentele-ng>=1.4` — and a shared user site-packages can only hold one version of
+each of those for every program on the machine. Installing this project into
+`~/.local` therefore does not sit next to other Telegram tooling; it replaces
+whatever version that tooling was pinned to, and the breakage shows up later, in
+the other program, as an import or attribute error nobody connects back to this
+install. Give it a virtualenv, a `pipx` install or a `uv tool` install, and let
+`PATH` reach it through a symlink.
+
+That is the layout on the maintainer's host as of 2026-09-03. `tg-ai` had been
+installed editable into the shared `~/.local` since 2026-08-23, where its
+`mcp 2.0` and `telethon 1.44` sat directly on top of the versions
+`tg-claude-userbot` pins (`mcp==1.27.2`, `telethon==1.43.2`, `opentele-ng==1.3.1`).
+That project runs its production process inside Docker, so nothing was actually
+broken — but the shared site had become a place where the next `pip install` of
+either project would decide the other's dependency versions.
+
+```
+/home/deploy/.venvs/tg-ai                 # venv, python 3.12
+  └── editable install of /home/deploy/github/telegram-ai-cli-mcp
+/home/deploy/.local/bin/tg-ai  ->  /home/deploy/.venvs/tg-ai/bin/tg-ai
+```
+
+Two things about the cleanup that followed are worth writing down, because they
+generalise:
+
+- **`mcp` and `mcp-types` were removed from the shared site.** Both arrived only
+  as dependencies of this project (`pip show mcp` listed `Required-by:
+  telegram-ai-cli-mcp` and nothing else), and `mcp-types` is a dependency of
+  `mcp` alone. With the editable install gone, both were orphans.
+- **`telethon` and `opentele-ng` were left in place.** An unrelated tool on the
+  same host, `tdata-session-exporter`, declares both. A dependency that looks
+  like it belongs to the program you are moving may be load-bearing for
+  something else in the same site — check `Required-by` before removing
+  anything, per package, and leave whatever has another consumer.
+
+The consequence of the split is that `python3 -c "import mcp"` outside the venv
+now fails with `ModuleNotFoundError`, which is the intended state: the only
+Python that can import this project's dependency set is
+`/home/deploy/.venvs/tg-ai/bin/python`. Upgrading `tg-ai` on that host means
+`/home/deploy/.venvs/tg-ai/bin/python -m pip install -e
+/home/deploy/github/telegram-ai-cli-mcp`, never a bare `pip install`.

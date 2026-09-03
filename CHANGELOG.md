@@ -989,6 +989,19 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Changed
 
+- **2026-09-03 — documented that `tg-ai` needs an environment of its own, and
+  moved the maintainer's host onto one.** The declared dependency floor
+  (`mcp>=2.0`, `telethon>=1.44`, `opentele-ng>=1.4`) collides with the pins of
+  `tg-claude-userbot` on the same machine (`mcp==1.27.2`, `telethon==1.43.2`,
+  `opentele-ng==1.3.1`), and a shared user site-packages resolves that collision
+  by simply overwriting one side. `tg-ai` now lives in `/home/deploy/.venvs/tg-ai`
+  there, with `~/.local/bin/tg-ai` as a symlink into it; `mcp` and `mcp-types`
+  were removed from the shared site as orphans, while `telethon` and
+  `opentele-ng` were deliberately left because another tool on the host
+  (`tdata-session-exporter`) declares them. No code changed — README (Install)
+  and `docs/operations.md` (Deployment on a shared host) now say to install into
+  a `pipx` / `uv tool` / venv environment rather than a shared site, and why.
+
 - **2026-08-26 — project renamed to `telegram-ai-cli-mcp`.** The installable
   Python project is now `telegram-ai-cli-mcp`, its import package is
   `telegram_ai_cli_mcp`, and the MCP server identifies itself as

@@ -119,6 +119,27 @@ pip install .
 tg-ai --version
 ```
 
+Give it an environment of its own — `pipx`, `uv tool`, or a plain
+`python3 -m venv` — rather than a shared user site, and put the resulting
+`bin/tg-ai` on `PATH`. The dependency floor here is deliberately current
+(`mcp>=2.0`, `telethon>=1.44`), and a shared site-packages holds exactly one
+version of a package for every program on the machine: anything pinned below
+that floor loses, silently, the moment this project is installed or upgraded
+alongside it.
+
+That collision is live on the maintainer's host, where the `tg-claude-userbot`
+project pins `mcp==1.27.2` and `telethon==1.43.2`. Since 2026-09-03 `tg-ai`
+lives in its own virtualenv there and the shared entry point is a symlink into
+it:
+
+```
+/home/deploy/.venvs/tg-ai            # editable install of this repo
+/home/deploy/.local/bin/tg-ai   ->   /home/deploy/.venvs/tg-ai/bin/tg-ai
+```
+
+Details of that layout, and what was left behind in the shared site, are in
+[Operations](docs/operations.md#deployment-on-a-shared-host).
+
 ```bash
 docker build -t telegram-ai-cli-mcp .
 docker run --rm telegram-ai-cli-mcp tg-ai --version
