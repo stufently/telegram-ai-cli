@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +58,19 @@ CHANNEL_BASE = -(10**12)
 GROUP_ID = CHANNEL_BASE - 4242
 FRIEND_ID = 555
 
-BANGKOK = "2026-09-01T09:00:00+07:00"
+# A fixed calendar date breaks the day it becomes "the past" instead of "the
+# future" — this suite failed CI on 2026-09-03 for exactly that reason
+# (schedule_date() refused it as no longer reachable). Anchor to "now" plus a
+# margin comfortably inside [MIN_SCHEDULE_LEAD, MAX_SCHEDULE_AHEAD) instead, so
+# the date keeps moving with the clock.
+_BANGKOK_TZ = timezone(timedelta(hours=7))
+_BANGKOK_DT = (
+    (datetime.now(UTC) + timedelta(days=30))
+    .astimezone(_BANGKOK_TZ)
+    .replace(hour=9, minute=0, second=0, microsecond=0)
+)
+BANGKOK = _BANGKOK_DT.isoformat()
+BANGKOK_UTC = _BANGKOK_DT.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @pytest.fixture(autouse=True)
@@ -229,8 +241,8 @@ async def test_the_summary_names_the_time_with_its_offset_and_in_utc(
     plan = await plan_schedule_message(ctx, input_for())
 
     assert plan.operation == "message.schedule"
-    assert "2026-09-01T09:00:00+07:00" in plan.summary
-    assert "2026-09-01T02:00:00Z" in plan.summary
+    assert BANGKOK in plan.summary
+    assert BANGKOK_UTC in plan.summary
     assert "Marketing" in plan.summary
     assert "the exact bytes a human is going to approve" in plan.summary
     # Cancellable in Telegram itself is the reason this operation exists; the
@@ -287,7 +299,7 @@ def test_a_time_only_a_minute_away_is_not_a_schedule() -> None:
 
 def test_a_time_is_cut_to_whole_seconds() -> None:
     """The wire has nothing finer, and the summary must not claim it does."""
-    params = input_for(at="2026-09-01T09:00:00.500+07:00")
+    params = input_for(at=_BANGKOK_DT.replace(microsecond=500000).isoformat())
     assert params.at.microsecond == 0
     assert schedule_date(params) == int(datetime.fromisoformat(BANGKOK).timestamp())
 

@@ -1097,6 +1097,18 @@ before that, breaking changes can happen on any `0.x` release.
 
 ### Fixed
 
+- **CI failing since 2026-09-03: `tests/test_schedule.py` pinned "now" to a
+  literal `2026-09-01T09:00:00+07:00`.** Once the real clock passed that date,
+  `plan_schedule_message` (called with no `now=` override, i.e. the real clock)
+  correctly refused it as a time "in the past or too close to now", and four
+  tests failed on every supported Python version. Not a self-hosted-runner or
+  host-migration issue — `test`/`lint`/`smoke` all ran on GitHub-hosted
+  `ubuntu-latest`. The fixed calendar date is now computed from `datetime.now()`
+  plus a 30-day margin (well inside `[MIN_SCHEDULE_LEAD, MAX_SCHEDULE_AHEAD)`),
+  and the two hardcoded summary-string assertions derive from that same value
+  instead of a second literal, so the suite cannot drift out of sync with the
+  clock again.
+
 - **`folder add` could never have run.** `plan_folder_add` calls
   `resolve_chat_argument` — the resolver that understands a `t.me` link — while
   the import beside it named `resolve_peer`, so every invocation that got as far
